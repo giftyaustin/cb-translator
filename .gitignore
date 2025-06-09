@@ -1,0 +1,52 @@
+# Node modules
+node_modules/
+
+# Dependency lock files (optional: only if you don't want to track them)
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.*.local
+
+# Coverage reports
+coverage/
+*.lcov
+
+# Build outputs
+dist/
+build/
+.cache/
+.next/
+out/
+.temp/
+.astro/
+
+# IDE configs
+.vscode/
+.idea/
+*.swp
+
+# Others
+*.log
+*.tgz
+*.gz
+*.zip
+
+# TypeScript
+*.tsbuildinfo
+
+# Misc
+.parcel-cache/
+eslintcache
