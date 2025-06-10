@@ -88,15 +88,15 @@ export class SignalingGateway implements OnGatewayInit {
 
                     const audioPlainTransport =
                         await this.mediasoupService.createPlainTransport("send");
-                    const recvTransport = await this.mediasoupService.createPlainTransport("recv");
-                    const ffmpegProducer = await recvTransport.produce({
-                        kind: "audio",
-                        rtpParameters: rtpParameters,
-                    })
+                    // const recvTransport = await this.mediasoupService.createPlainTransport("recv");
+                    // const ffmpegProducer = await recvTransport.produce({
+                    //     kind: "audio",
+                    //     rtpParameters: rtpParameters,
+                    // })
 
-                    const listenRtpIp = recvTransport.tuple.localIp;
-                    const listenRtpPort = recvTransport.tuple.localPort;
-                    const listenRtcpPort = recvTransport.rtcpTuple?.localPort;
+                    // const listenRtpIp = recvTransport.tuple.localIp;
+                    // const listenRtpPort = recvTransport.tuple.localPort;
+                    // const listenRtcpPort = recvTransport.rtcpTuple?.localPort;
                     await audioPlainTransport.connect({
                         ip: '127.0.0.1',
                         port: rtpPort,
@@ -119,95 +119,13 @@ export class SignalingGateway implements OnGatewayInit {
                         producerId: producer.id,
                         rtpPort: rtpPort,
                         rtcpPort: rtcpPort,
-                        ip: listenRtpIp,
+                        ip: audioPlainTransport.tuple.localIp,
                         codec: codecName,
                         clockRate,
                         channels,
                         payloadType,
-                        listenRtpPort
+                        listenRtpId: 20000
                     });
-
-                    const sdp = `
-v=0
-o=- 0 0 IN IP4 127.0.0.1
-s=Mediasoup Audio
-c=IN IP4 127.0.0.1
-t=0 0
-m=audio ${rtpPort} RTP/AVP ${payloadType}
-a=rtpmap:${payloadType} ${codecName}/${clockRate}/${channels}
-a=recvonly
-          `.trim();
-
-                    const tmpDir = os.tmpdir();
-                    const sdpPath = path.join(
-                        tmpDir,
-                        `audio_${producer.id}_${Date.now()}.sdp`,
-                    );
-                    const outputFile = path.join(
-                        tmpDir,
-                        `audio_${producer.id}_${Date.now()}.wav`,
-                    );
-
-                    // fs.writeFileSync(sdpPath, sdp);
-                    // console.log(`✅ SDP written to ${sdpPath}`);
-
-                    // const ffmpeg = spawn('ffmpeg', [
-                    //     '-loglevel',
-                    //     'info',
-                    //     '-protocol_whitelist',
-                    //     'file,udp,rtp',
-                    //     '-f',
-                    //     'sdp',
-                    //     '-i',
-                    //     sdpPath,
-                    //     '-c:a',
-                    //     'pcm_s16le',
-                    //     '-ar',
-                    //     '48000',
-                    //     '-ac',
-                    //     '2',
-                    //     '-f',
-                    //     'wav',
-                    //     'pipe:1',
-                    // ]);
-
-                    // const sendFfmpeg = spawn('ffmpeg', [
-                    //     '-f', 's16le',
-                    //     '-ar', '48000',
-                    //     '-ac', '2',
-                    //     '-i', 'pipe:0',
-                    //     '-acodec', 'libopus',
-                    //     '-f', 'rtp',
-                    //     `rtp://127.0.0.1:${listenRtpPort}`,
-                    // ])
-
-                    // ffmpeg.stdin.write(sdp);
-                    // ffmpeg.stdin.end();
-
-                    // const SEGMENT_DURATION = 5;
-                    // const SEGMENT_SIZE = 48000 * 2 * 2 * SEGMENT_DURATION;
-                    // const segments: Buffer[] = [];
-                    // let buffered = Buffer.alloc(0);
-
-                    // ffmpeg.stdout.on('data', (chunk) => {
-                    //     buffered = Buffer.concat([buffered, chunk]);
-                    //     while (buffered.length >= SEGMENT_SIZE) {
-                    //         const segment = buffered.slice(0, SEGMENT_SIZE);
-                    //         segments.push(segment);
-                    //         buffered = buffered.slice(SEGMENT_SIZE);
-                    //         console.log(`✅ New 5-second audio segment pushed. Total segments: ${segments.length}`);
-                    //     }
-
-                    // })
-
-
-                    // ffmpeg.stderr.on('data', (data) => {
-                    //     console.error(data.toString());
-                    // });
-
-                    // ffmpeg.on('close', (code) => {
-                    //     console.log(`🎧 Audio recording finished. File saved: ${outputFile}`);
-                    // });
                 }
 
                 socket.join(roomCode);

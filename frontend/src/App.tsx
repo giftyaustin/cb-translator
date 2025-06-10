@@ -6,16 +6,24 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [roomCode, setRoomCode] = useState('');
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const [remoteStreams, setRemoteStreams] = useState<MediaStream[]>([]);
+  const [remoteAudioStreams, setRemoteAudioStreams] = useState<MediaStream[]>([]);
+  const [remoteVideoStreams, setRemoteVideoStreams] = useState<MediaStream[]>([]);
+
   const localVideoRef = useRef<HTMLVideoElement>(null);
 
   const joinMeeting = async () => {
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       setStream(mediaStream);
-      await startMediasoup(roomCode, (newStream) => {
-        setRemoteStreams((prev) => [...prev, newStream]);
+
+      await startMediasoup(roomCode, (remoteStream, kind) => {
+        if (kind === 'audio') {
+          setRemoteAudioStreams((prev) => [...prev, remoteStream]);
+        } else {
+          setRemoteVideoStreams((prev) => [...prev, remoteStream]);
+        }
       });
+
       await startStreaming(mediaStream, roomCode);
       setJoined(true);
     } catch (err: any) {
@@ -26,7 +34,7 @@ function App() {
 
   useEffect(() => {
     if (joined && stream && localVideoRef.current) {
-      localVideoRef.current.srcObject = stream;
+      localVideoRef.current.srcObject = new MediaStream(stream.getVideoTracks());
     }
   }, [joined, stream]);
 
@@ -44,7 +52,7 @@ function App() {
           <br />
           <button
             onClick={joinMeeting}
-            className="px-6 py-2 bg-blue-600  rounded-lg hover:bg-blue-700 transition"
+            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
           >
             Join
           </button>
@@ -58,6 +66,7 @@ function App() {
           {joined ? "You're in the meeting" : 'Waiting to join'}
         </h2>
 
+        {/* Local video */}
         <video
           ref={localVideoRef}
           autoPlay
@@ -67,10 +76,11 @@ function App() {
           className="mx-auto w-80 aspect-video border-2 border-black rounded-lg shadow-md mb-6"
         />
 
+        {/* Remote Videos */}
         <div className="flex flex-wrap justify-center gap-6">
-          {remoteStreams.map((remoteStream, idx) => (
+          {remoteVideoStreams.map((remoteStream, idx) => (
             <video
-              key={idx}
+              key={`video-${idx}`}
               autoPlay
               playsInline
               controls
@@ -81,11 +91,22 @@ function App() {
                   videoElement.srcObject = remoteStream;
                 }
               }}
-              onLoadedMetadata={(e) =>
-                (e.currentTarget as HTMLVideoElement).play().catch((err) => {
-                  console.error('Autoplay error:', err);
-                })
-              }
+            />
+          ))}
+        </div>
+
+        {/* Remote Audios */}
+        <div>
+          {remoteAudioStreams.map((remoteStream, idx) => (
+            <audio
+              key={`audio-${idx}`}
+              autoPlay
+              controls
+              ref={(audioElement) => {
+                if (audioElement && !audioElement.srcObject) {
+                  audioElement.srcObject = remoteStream;
+                }
+              }}
             />
           ))}
         </div>

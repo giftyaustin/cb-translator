@@ -8,7 +8,7 @@ const consumedProducers = new Set<string>();
 
 export async function startMediasoup(
   roomCode: string,
-  onNewConsumerStream: (stream: MediaStream) => void
+  onNewConsumerStream: (stream: MediaStream, kind: string) => void
 ) {
   return new Promise<void>((resolve, reject) => {
     socket.emit('get-rtp-capabilities');
@@ -24,10 +24,10 @@ export async function startMediasoup(
 
         sendTransport.on('connect', ({ dtlsParameters }, callback) => {
           socket.emit('connect-transport-send', { dtlsParameters });
-          socket.once('transport-connected-send', ()=>{
+          socket.once('transport-connected-send', () => {
             console.log('transport connected');
             callback();
-            
+
           });
         });
 
@@ -67,7 +67,7 @@ export async function startStreaming(stream: MediaStream, roomCode: string) {
 
 async function consume(
   producerId: string,
-  onNewConsumerStream: (stream: MediaStream) => void
+  onNewConsumerStream: (stream: MediaStream, kind: string) => void
 ) {
   if (consumedProducers.has(producerId)) return;
   consumedProducers.add(producerId);
@@ -87,7 +87,73 @@ async function consume(
 
     const stream = new MediaStream([consumer.track]);
 
-    // Send stream back to React
-    onNewConsumerStream(stream);
+    // Pass both stream and kind to App
+    onNewConsumerStream(stream, kind);
+    if (kind === 'audio') {
+      const track = stream.getAudioTracks()[0];
+      if (track) {
+        sendAudioToPython(track);
+      }
+    }
   });
 }
+
+
+
+export async function sendAudioToPython(audioTrack: MediaStreamTrack) {
+  const pc = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+  });
+
+  pc.addTransceiver(audioTrack, { direction: 'sendonly' });
+
+  pc.ontrack = (event) => {
+    console.log('🎤 Received track from server:', event.track.kind);
+    const stream = new MediaStream([event.track]);
+    const audio = new Audio();
+    audio.srcObject = stream;
+    audio.autoplay = true;
+    audio.muted = false;
+    audio.play().then(() => {
+      console.log('▶️ Playing audio chunk from server');
+    }).catch(err => {
+      console.error('❌ Error playing audio:', err);
+    });
+  };
+
+  pc.onicecandidate = (event) => {
+    if (event.candidate) {
+      console.log('🧊 ICE candidate:', event.candidate);
+    }
+  };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  await new Promise((resolve) => {
+    if (pc.iceGatheringState === 'complete') {
+      resolve(null);
+    } else {
+      pc.onicegatheringstatechange = () => {
+        if (pc.iceGatheringState === 'complete') {
+          resolve(null);
+        }
+      };
+    }
+  });
+
+  try {
+    const response = await fetch('http://localhost:8000/offer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(pc.localDescription)
+    });
+    const answer = await response.json();
+    await pc.setRemoteDescription(answer);
+  } catch (err) {
+    console.error('❌ Error in WebRTC setup:', err);
+  }
+}
+
+
+

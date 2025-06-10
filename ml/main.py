@@ -6,6 +6,7 @@ import subprocess
 import threading
 
 def write_sdp_file(payload_type, codec_name, clock_rate, channels, rtp_port):
+    print(rtp_port)
     sdp_content = f"""v=0
 o=- 0 0 IN IP4 127.0.0.1
 s=Mediasoup Audio
@@ -35,7 +36,7 @@ a=recvonly
 #             "-i", "pipe:0",        # read from stdin
 #             "-c:a", "libopus",     # or pcm_mulaw if Mediasoup expects mulaw
 #             "-f", "rtp",
-#             f"rtp://{target_ip}:{target_port}"
+#             f"rtp://{target_ip}:{25006}"
 #         ],
 #         stdin=subprocess.PIPE,
 #         stdout=subprocess.DEVNULL,
@@ -100,7 +101,6 @@ async def message(data):
     #     target_port=data["listenRtpPort"]
     # )
 
-    # ffmpeg_send.stdin.write(ffmpeg_proc.stdout.read())
     
 
     # Start logging FFmpeg output
@@ -118,8 +118,8 @@ async def message(data):
         while len(buffer) >= SEGMENT_SIZE:
             segment = buffer[:SEGMENT_SIZE]
             buffer = buffer[SEGMENT_SIZE:]
-            print(segment)
-            print(buffer)
+            # ffmpeg_send.stdin.write(segment)
+            # ffmpeg_send.stdin.flush()
             print("🔊 Received 5-second audio segment")
 
     ffmpeg_proc.stdout.close()
