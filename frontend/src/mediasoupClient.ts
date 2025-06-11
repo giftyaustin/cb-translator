@@ -105,21 +105,38 @@ export async function sendAudioToPython(audioTrack: MediaStreamTrack) {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
   });
 
-  pc.addTransceiver(audioTrack, { direction: 'sendonly' });
+  pc.addTransceiver(audioTrack, {direction: "sendrecv"});
 
-  pc.ontrack = (event) => {
-    console.log('🎤 Received track from server:', event.track.kind);
-    const stream = new MediaStream([event.track]);
-    const audio = new Audio();
-    audio.srcObject = stream;
-    audio.autoplay = true;
-    audio.muted = false;
-    audio.play().then(() => {
-      console.log('▶️ Playing audio chunk from server');
+pc.ontrack = (event) => {
+  console.log('🎤 Received track from server:', event.track.kind);
+
+  // If multiple tracks (e.g., audio + video), use event.streams[0]
+  let stream;
+  if (event.streams && event.streams[0]) {
+    stream = event.streams[0];
+  } else {
+    stream = new MediaStream([event.track]);
+  }
+
+  // Create audio element only for audio tracks
+  if (event.track.kind === 'audio') {
+    const audioElement = document.createElement("audio");
+    audioElement.autoplay = true;
+    audioElement.controls = true; // Optional
+    audioElement.srcObject = stream;
+    console.log(stream);
+    
+
+    document.body.appendChild(audioElement);
+
+    audioElement.play().then(() => {
+      console.log('▶️ Playing audio from server');
     }).catch(err => {
       console.error('❌ Error playing audio:', err);
     });
-  };
+  }
+};
+
 
   pc.onicecandidate = (event) => {
     if (event.candidate) {

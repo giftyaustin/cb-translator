@@ -4,7 +4,7 @@ import { startMediasoup, startStreaming } from './mediasoupClient';
 function App() {
   const [joined, setJoined] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [roomCode, setRoomCode] = useState('');
+  const [roomCode, setRoomCode] = useState('a');
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [remoteAudioStreams, setRemoteAudioStreams] = useState<MediaStream[]>([]);
   const [remoteVideoStreams, setRemoteVideoStreams] = useState<MediaStream[]>([]);
@@ -102,6 +102,7 @@ function App() {
               key={`audio-${idx}`}
               autoPlay
               controls
+              muted
               ref={(audioElement) => {
                 if (audioElement && !audioElement.srcObject) {
                   audioElement.srcObject = remoteStream;
