@@ -52,7 +52,7 @@ function App() {
           <br />
           <button
             onClick={joinMeeting}
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+            className="px-6 py-2 bg-blue-600 rounded-lg hover:bg-blue-700 transition"
           >
             Join
           </button>
