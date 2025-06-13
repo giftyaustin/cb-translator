@@ -10,7 +10,7 @@ run command: npm run dev
 
 ##python:
 cd ml
-run command: python main.py
+run command: python webrtc_python.py
 
 
 instructions:
