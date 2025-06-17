@@ -114,7 +114,8 @@ async def offer(request):
                         samples = chunk_frame.to_ndarray()
                         logging.info(f"ℹ️ Accumulated {samples.shape[1]} samples with shape {samples.shape}")
                         chunk_bytes = samples.tobytes()    
-                                            
+                        #print(chunk_bytes)
+
                         timestamp = int(time.time() * 1000)
                         filename = f"chunk_{timestamp}.wav"
                         # save_wav_from_bytes(filename, chunk_bytes, sample_rate=sample_rate, num_channels=2)

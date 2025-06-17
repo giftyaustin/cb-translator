@@ -15,3 +15,5 @@ run command: python webrtc_python.py
 
 instructions:
 run backend before you run python server
+** Use this to get ipv4 address ' ip -4 addr show '
+paste this in constants.ts (backend/src/calls/constants.ts) file, at "announcedIp" key

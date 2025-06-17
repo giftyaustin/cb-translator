@@ -1,5 +1,5 @@
 export const msConfig = {
-    announcedIp: '10.10.0.82',
+    announcedIp: '10.10.0.203',
     worker: {
         rtcMinPort: 10000,
         rtcMaxPort: 10100,
