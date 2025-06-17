@@ -1,16 +1,18 @@
+import socketio
+import asyncio
 import os
-import subprocess
 import tempfile
+import subprocess
 import threading
 import time
-import uuid
-import wave
-from subprocess import Popen
-from fastapi import FastAPI
-from pydantic import BaseModel
-import uvicorn
-import numpy as np
-from scipy import signal
+from pydub import AudioSegment
+from pydub.playback import play
+import time
+
+
+
+#byte_resltime_stream_code_seamlessm4t
+
 import torch
 import torchaudio
 
