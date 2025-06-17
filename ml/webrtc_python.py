@@ -27,7 +27,7 @@ class ChunkedAudioStreamTrack(MediaStreamTrack):
     def __init__(self, sample_rate=48000):
         super().__init__()
         self.sample_rate = sample_rate
-        self.samples_per_frame = 960
+        self.samples_per_frame = 960 * 2
         self.frame_queue = deque()
         self.timestamp = 0
         self._queue_event = asyncio.Event()
@@ -37,18 +37,19 @@ class ChunkedAudioStreamTrack(MediaStreamTrack):
         # samples = np.frombuffer(chunk_bytes, dtype=np.int16).reshape(2, -1)
         logging.info(f"🔊 Received {samples.shape[1]} samples with shape {samples.shape}")
         for i in range(0, samples.shape[1], self.samples_per_frame):
-            frame_samples = samples[:, i:i+self.samples_per_frame]
+            frame_samples = samples[:, i: i+self.samples_per_frame]
             if frame_samples.shape[1] < self.samples_per_frame:
                 pad_width = self.samples_per_frame - frame_samples.shape[1]
                 frame_samples = np.pad(frame_samples, ((0, 0), (0, pad_width)), mode='constant')
             # logging.info(f"==================== {frame_samples.shape}")
             frame = AudioFrame.from_ndarray(frame_samples, format="s16", layout="stereo")
             frame.sample_rate = self.sample_rate
-            frame.time_base = fractions.Fraction(1, self.sample_rate)
+            frame.time_base = fractions.Fraction(1, 48000)
             frame.pts = self.timestamp
             self.timestamp += self.samples_per_frame
 
             self.frame_queue.append(frame)
+            logging.info(f"📦 Pushed frame {frame}")
             self._queue_event.set()
 
     async def recv(self):
@@ -107,6 +108,7 @@ async def offer(request):
                         logger.info(f"Initialized AudioFifo: sample_rate={sample_rate}, samples_per_chunk={samples_per_chunk}")
 
                     fifo.write(frame)
+                    logging.info(f"received frame: {frame}")
 
                     while fifo.samples >= samples_per_chunk:
                         chunk_frame = fifo.read(samples=samples_per_chunk)
@@ -117,7 +119,7 @@ async def offer(request):
                                             
                         timestamp = int(time.time() * 1000)
                         filename = f"chunk_{timestamp}.wav"
-                        # save_wav_from_bytes(filename, chunk_bytes, sample_rate=sample_rate, num_channels=2)
+                        save_wav_from_bytes(filename, chunk_bytes, sample_rate=sample_rate, num_channels=2)
 
                         # Send chunk back over WebRTC
                         logging.info("Starting streaming back")
