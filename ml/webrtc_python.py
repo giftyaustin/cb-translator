@@ -24,44 +24,82 @@ routes = web.RouteTableDef()
 class ChunkedAudioStreamTrack(MediaStreamTrack):
     kind = "audio"
 
-    def __init__(self, sample_rate=48000):
+    def __init__(self, sample_rate=48000, samples_per_frame=960):
         super().__init__()
-        self.sample_rate = sample_rate
-        self.samples_per_frame = 960 * 2
         self.frame_queue = deque()
         self.timestamp = 0
         self._queue_event = asyncio.Event()
+        self.update_info(sample_rate, samples_per_frame)
 
-    def push_chunk(self, chunk_bytes: bytes):
-        samples = np.frombuffer(chunk_bytes, dtype=np.int16).reshape(1, -1)
-        # samples = np.frombuffer(chunk_bytes, dtype=np.int16).reshape(2, -1)
-        logging.info(f"🔊 Received {samples.shape[1]} samples with shape {samples.shape}")
-        for i in range(0, samples.shape[1], self.samples_per_frame):
-            frame_samples = samples[:, i: i+self.samples_per_frame]
-            if frame_samples.shape[1] < self.samples_per_frame:
-                pad_width = self.samples_per_frame - frame_samples.shape[1]
-                frame_samples = np.pad(frame_samples, ((0, 0), (0, pad_width)), mode='constant')
-            # logging.info(f"==================== {frame_samples.shape}")
-            frame = AudioFrame.from_ndarray(frame_samples, format="s16", layout="stereo")
-            frame.sample_rate = self.sample_rate
-            frame.time_base = fractions.Fraction(1, 48000)
-            frame.pts = self.timestamp
-            self.timestamp += self.samples_per_frame
+    def update_info(self, sample_rate, samples_per_frame, format_name='s16', layout_name='stereo'):
+        self.sample_rate = sample_rate
+        self.samples_per_frame = samples_per_frame
 
-            self.frame_queue.append(frame)
+        # internal audio queue, used to send frames of correct size
+        self.fifo = AudioFifo(  format=format_name,
+                                layout=layout_name,
+                                rate=sample_rate)
+
+    def push_av_frame(self, frame: AudioFrame):
+        self.fifo.write(frame)
+        processed_any = False
+        while self.fifo.samples >= self.samples_per_frame:
+            processed_any = True
+            chunk_frame = self.fifo.read(samples=self.samples_per_frame)
+            chunk_frame.time_base = fractions.Fraction(1, self.sample_rate)
+            chunk_frame.pts = self.timestamp
+            self.timestamp += chunk_frame.samples
+            self.frame_queue.append(chunk_frame)
             logging.info(f"📦 Pushed frame {frame}")
+        if processed_any:
             self._queue_event.set()
 
     async def recv(self):
         while not self.frame_queue:
             self._queue_event.clear()
             await self._queue_event.wait()
+        return self.frame_queue.popleft()
 
-        frame = self.frame_queue.popleft()
-        frame_time = self.samples_per_frame / self.sample_rate
-        await asyncio.sleep(frame_time)
-        return frame
+def process_audio_frame_bytes(
+    input_frame: AudioFrame,
+    operation_func, # A callable (function, lambda, etc.) that takes bytes and returns modified bytes (such as a language translation model that returns the same ammount of bytes it receives)
+) -> AudioFrame:
+    input_frame_array = input_frame.to_ndarray()
+    input_shape = input_frame_array.shape
+    audio_bytes = input_frame_array.tobytes()
+    expected_bytes_len = len(audio_bytes)
 
+    processed_bytes = operation_func(audio_bytes)
+
+    if not isinstance(processed_bytes, bytes):
+        raise TypeError("operation_func must return bytes.")
+    if len(processed_bytes) != expected_bytes_len:
+        raise ValueError(
+            f"operation_func returned bytes of incorrect length. "
+            f"Expected {expected_bytes_len}, got {len(processed_bytes)}."
+        )
+    
+    if input_frame.format.name == "s16":
+        np_dtype = np.int16
+    elif input_frame.format.name == "flt":
+        np_dtype = np.float32
+    else:
+        logger.warning(f"Unsupported input format {input_frame.format.name}. Defaulting to int16.")
+        np_dtype = np.int16
+
+    processed_ndarray = np.frombuffer(processed_bytes, dtype=np_dtype).reshape(
+        input_shape[0], input_shape[1]
+    )
+    output_frame = AudioFrame.from_ndarray(
+        processed_ndarray,
+        format=input_frame.format.name,
+        layout=input_frame.layout.name
+    )
+    output_frame.sample_rate = input_frame.sample_rate
+    output_frame.time_base = input_frame.time_base
+    output_frame.pts = input_frame.pts
+
+    return output_frame
 
 def save_wav_from_bytes(filename: str, audio_bytes: bytes, sample_rate=48000, num_channels=1, sample_width=2):
     os.makedirs("recordings", exist_ok=True)
@@ -73,6 +111,12 @@ def save_wav_from_bytes(filename: str, audio_bytes: bytes, sample_rate=48000, nu
         wf.writeframes(audio_bytes)
     logger.info(f"💾 Saved WAV file: {filepath}")
 
+def audio_bytes_function(chunk_bytes, sample_rate):
+    logger.info(f"💾 About to save chunk: samples={len(chunk_bytes)}")
+    timestamp = int(time.time() * 1000)
+    filename = f"chunk_{timestamp}.wav"
+    save_wav_from_bytes(filename, chunk_bytes, sample_rate=sample_rate, num_channels=2)
+    return chunk_bytes
 
 @routes.post("/offer")
 async def offer(request):
@@ -92,7 +136,7 @@ async def offer(request):
         logger.info(f"🎤 Track received: kind={track.kind}")
         if track.kind == "audio":
             fifo = None
-            chunk_duration = 5.0
+            chunk_duration = 1.0 # TODO in ChunkedAudioStreamTrack, send audio in a separated thread to ensure proper timing of the output, allowing bigger duration
             try:
                 while True:
                     frame: AudioFrame = await track.recv()
@@ -102,28 +146,20 @@ async def offer(request):
                         fifo = AudioFifo(format=frame.format.name,
                                          layout=frame.layout.name,
                                          rate=frame_rate)
-                        sample_rate = frame_rate
-                        samples_per_chunk = int(chunk_duration * sample_rate)
-                        playback_track.sample_rate = sample_rate
-                        logger.info(f"Initialized AudioFifo: sample_rate={sample_rate}, samples_per_chunk={samples_per_chunk}")
+                        samples_per_chunk = int(chunk_duration * frame_rate)
+                        playback_track.update_info(frame_rate, frame.samples, frame.format.name, frame.layout.name)
+                        logger.info(f"Initialized AudioFifo: sample_rate={frame_rate}, samples_per_chunk={samples_per_chunk}")
 
                     fifo.write(frame)
                     logging.info(f"received frame: {frame}")
 
                     while fifo.samples >= samples_per_chunk:
                         chunk_frame = fifo.read(samples=samples_per_chunk)
-                        logger.info(f"💾 About to save chunk: samples={chunk_frame.samples}")
-                        samples = chunk_frame.to_ndarray()
-                        logging.info(f"ℹ️ Accumulated {samples.shape[1]} samples with shape {samples.shape}")
-                        chunk_bytes = samples.tobytes()    
-                                            
-                        timestamp = int(time.time() * 1000)
-                        filename = f"chunk_{timestamp}.wav"
-                        save_wav_from_bytes(filename, chunk_bytes, sample_rate=sample_rate, num_channels=2)
+                        output_frame = process_audio_frame_bytes(chunk_frame, lambda x:audio_bytes_function(x, frame_rate))
 
                         # Send chunk back over WebRTC
                         logging.info("Starting streaming back")
-                        playback_track.push_chunk(chunk_bytes)
+                        playback_track.push_av_frame(output_frame)
 
             except Exception as e:
                 logger.error(f"❌ Error while receiving audio: {e}", exc_info=True)
