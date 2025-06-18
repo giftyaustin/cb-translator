@@ -43,6 +43,7 @@ out/
 *.tgz
 *.gz
 *.zip
+*.wav
 
 # TypeScript
 *.tsbuildinfo
@@ -50,3 +51,6 @@ out/
 # Misc
 .parcel-cache/
 eslintcache
+
+# Python cache
+ml/__pycache__/
