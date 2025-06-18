@@ -14,6 +14,22 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
 from av import AudioFrame
 from av.audio.fifo import AudioFifo
 
+from seamlessm4t_translator_utils import translate_audio
+from streaming_translator_utils import StatelessBytesTranslator
+translator1 = StatelessBytesTranslator(tgt_lang="hin")  # Hindi output
+
+# numpy array to bytes
+def tensor_to_bytes(translated_wav):
+    # 1. Assume this is your audio in float32 format (range -1.0 to 1.0)
+    audio_np = np.array(translated_wav, dtype=np.float32)
+    # 2. Clip to [-1, 1] just in case
+    audio_np = np.clip(audio_np, -1.0, 1.0)
+    # 3. Convert to int16 format (PCM 16-bit)
+    audio_int16 = (audio_np * 32767).astype(np.int16)
+    # 4. Convert to raw PCM bytes
+    translated_audio_bytes = audio_int16.tobytes()
+    return translated_audio_bytes
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
