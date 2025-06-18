@@ -14,6 +14,22 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
 from av import AudioFrame
 from av.audio.fifo import AudioFifo
 
+from seamlessm4t_translator_utils import translate_audio
+from streaming_translator_utils import StatelessBytesTranslator
+translator1 = StatelessBytesTranslator(tgt_lang="hin")  # Hindi output
+
+# numpy array to bytes
+def tensor_to_bytes(translated_wav):
+    # 1. Assume this is your audio in float32 format (range -1.0 to 1.0)
+    audio_np = np.array(translated_wav, dtype=np.float32)
+    # 2. Clip to [-1, 1] just in case
+    audio_np = np.clip(audio_np, -1.0, 1.0)
+    # 3. Convert to int16 format (PCM 16-bit)
+    audio_int16 = (audio_np * 32767).astype(np.int16)
+    # 4. Convert to raw PCM bytes
+    translated_audio_bytes = audio_int16.tobytes()
+    return translated_audio_bytes
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -116,13 +132,57 @@ async def offer(request):
                         chunk_bytes = samples.tobytes()    
                         #print(chunk_bytes)
 
+                        which_translator = 2
+
+                        if which_translator == 1:
+                            #seamelessm4T
+                            sample_rate = 48000
+                            start_time = time.time()
+                            translated_wav, translated_sr = translate_audio(chunk_bytes, sample_width=2, frame_rate = sample_rate, channels = 2, tgt_lang = "hin")
+                            end_time = time.time()
+                            print(f"Inference time: {end_time-start_time: .4f} sec.")
+                            print(translated_sr)
+                            out_file = f"translated_raw_{time.time()}.wav"
+                            #torchaudio.save(out_file, translated_wav, 16000)
+                            #translated_segment = AudioSegment.from_wav(out_file)
+                            #play(translated_segment)
+                            #translated_wav = translated_wav.squeeze().cpu().numpy()
+                            print(translated_wav)
+
+                        if which_translator ==2:
+                            #seamless_streaming
+                            #audio_bytes = original_segment.raw_data
+                            sample_width = 2
+                            frame_rate = 48000
+                            channels = 2
+                            #print(f"Sample width: {sample_width}, Frame rate: {frame_rate}, Channels: {channels}")
+                            start_time = time.time()
+                            translated_wav, text = translator1.translate_chunk(
+                                chunk_bytes,
+                                input_sample_rate=frame_rate,
+                                sample_width=sample_width,
+                                channels=channels
+                                )
+                            end_time = time.time()
+                            print(translated_wav, text)
+                            print(f"Inference time: {end_time-start_time: .4f} sec.")
+                            if translated_wav is not None:
+                                translator1.play_audio(translated_wav)
+                                #translator1.save_audio(translated_wav)
+                            if text:
+                                print("📝", text)
+                        
+                        translated_audio_bytes = tensor_to_bytes(translated_wav)
+
                         timestamp = int(time.time() * 1000)
                         filename = f"chunk_{timestamp}.wav"
-                        # save_wav_from_bytes(filename, chunk_bytes, sample_rate=sample_rate, num_channels=2)
+                        save_wav_from_bytes(filename, chunk_bytes, sample_rate=sample_rate, num_channels=2)
 
                         # Send chunk back over WebRTC
                         logging.info("Starting streaming back")
-                        playback_track.push_chunk(chunk_bytes)
+                        #playback_track.push_chunk(chunk_bytes)
+                        playback_track.push_chunk(translated_audio_bytes)
+
 
             except Exception as e:
                 logger.error(f"❌ Error while receiving audio: {e}", exc_info=True)
