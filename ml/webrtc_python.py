@@ -7,6 +7,7 @@ import wave
 import os
 import time
 from collections import deque
+import threading
 
 from aiohttp import web
 import aiohttp_cors
@@ -36,7 +37,6 @@ logger = logging.getLogger(__name__)
 pcs = set()
 routes = web.RouteTableDef()
 
-
 class ChunkedAudioStreamTrack(MediaStreamTrack):
     kind = "audio"
 
@@ -46,6 +46,11 @@ class ChunkedAudioStreamTrack(MediaStreamTrack):
         self.timestamp = 0
         self._queue_event = asyncio.Event()
         self.update_info(sample_rate, samples_per_frame)
+        
+        # Thread control
+        self._processing_thread = None
+        self._stop_event = threading.Event()
+        self._start_processing_thread()
 
     def update_info(self, sample_rate, samples_per_frame, format_name='s16', layout_name='stereo'):
         self.sample_rate = sample_rate
@@ -55,19 +60,39 @@ class ChunkedAudioStreamTrack(MediaStreamTrack):
         self.fifo = AudioFifo(  format=format_name,
                                 layout=layout_name,
                                 rate=sample_rate)
+        
+    def _start_processing_thread(self):
+        """Start the frame processing thread"""
+        if self._processing_thread is None or not self._processing_thread.is_alive():
+            self._stop_event.clear()
+            self._processing_thread = threading.Thread(
+                target=self._process_frames_loop,
+                daemon=True
+            )
+            self._processing_thread.start()
+
+    def _process_frames_loop(self):
+        """Thread loop that processes frames every 0.02 seconds"""
+        while not self._stop_event.is_set():
+            try:
+                self.send_frame()
+                time.sleep(0.02)
+            except Exception as e:
+                logger.error(f"Error in processing thread: {e}")
+                break
 
     def push_av_frame(self, frame: AudioFrame):
+        """Simply write the frame to the FIFO - processing happens in separate thread"""
         self.fifo.write(frame)
-        processed_any = False
-        while self.fifo.samples >= self.samples_per_frame:
-            processed_any = True
+    
+    def send_frame(self):
+        if(self.fifo.samples >= self.samples_per_frame):
             chunk_frame = self.fifo.read(samples=self.samples_per_frame)
             chunk_frame.time_base = fractions.Fraction(1, self.sample_rate)
             chunk_frame.pts = self.timestamp
             self.timestamp += chunk_frame.samples
             self.frame_queue.append(chunk_frame)
-            logging.info(f"📦 Pushed frame {frame}")
-        if processed_any:
+            logger.info(f"📦 Pushed frame {chunk_frame}")
             self._queue_event.set()
 
     async def recv(self):
@@ -75,6 +100,16 @@ class ChunkedAudioStreamTrack(MediaStreamTrack):
             self._queue_event.clear()
             await self._queue_event.wait()
         return self.frame_queue.popleft()
+    
+    def stop(self):
+        """Stop the processing thread"""
+        if self._processing_thread and self._processing_thread.is_alive():
+            self._stop_event.set()
+            self._processing_thread.join(timeout=1.0)
+
+    def __del__(self):
+        """Cleanup when object is destroyed"""
+        self.stop()
 
 def process_audio_frame_bytes(
     input_frame: AudioFrame,
@@ -152,7 +187,7 @@ async def offer(request):
         logger.info(f"🎤 Track received: kind={track.kind}")
         if track.kind == "audio":
             fifo = None
-            chunk_duration = 1.0 # TODO in ChunkedAudioStreamTrack, send audio in a separated thread to ensure proper timing of the output, allowing bigger duration
+            chunk_duration = 5.0
             try:
                 while True:
                     frame: AudioFrame = await track.recv()
