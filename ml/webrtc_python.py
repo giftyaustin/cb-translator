@@ -155,7 +155,7 @@ async def offer(request):
 
                     while fifo.samples >= samples_per_chunk:
                         chunk_frame = fifo.read(samples=samples_per_chunk)
-                        output_frame = process_audio_frame_bytes(chunk_frame, lambda x:audio_bytes_function(x, frame_rate))
+                        output_frame = process_audio_frame_bytes(chunk_frame, lambda audio_bytes:audio_bytes_function(audio_bytes, frame_rate))
 
                         # Send chunk back over WebRTC
                         logging.info("Starting streaming back")
