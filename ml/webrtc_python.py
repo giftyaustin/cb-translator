@@ -140,23 +140,36 @@ def process_audio_frame_bytes(
 
     if not isinstance(processed_bytes, bytes):
         raise TypeError("operation_func must return bytes.")
-    if len(processed_bytes) != expected_bytes_len:  # TODO refactor function to handle outputs with different sizes
-        raise ValueError(
-            f"operation_func returned bytes of incorrect length. "
-            f"Expected {expected_bytes_len}, got {len(processed_bytes)}."
-        )
     
+    # Determine numpy dtype from input format
     if input_frame.format.name == "s16":
         np_dtype = np.int16
+        bytes_per_sample = 2
     elif input_frame.format.name == "flt":
         np_dtype = np.float32
+        bytes_per_sample = 4
     else:
         logger.warning(f"Unsupported input format {input_frame.format.name}. Defaulting to int16.")
         np_dtype = np.int16
+        bytes_per_sample = 2
+
+    # Calculate output dimensions
+    num_channels = input_frame_array.shape[0]
+    total_samples = len(processed_bytes) // bytes_per_sample
+    
+    if total_samples % num_channels != 0:
+        raise ValueError(
+            f"Processed bytes length ({len(processed_bytes)}) is not compatible "
+            f"with {num_channels} channels and {bytes_per_sample} bytes per sample."
+        )
+    
+    samples_per_channel = total_samples // num_channels
+    output_shape = (num_channels, samples_per_channel)
 
     processed_ndarray = np.frombuffer(processed_bytes, dtype=np_dtype).reshape(
-        input_shape[0], input_shape[1]
+        output_shape
     )
+    
     output_frame = AudioFrame.from_ndarray(
         processed_ndarray,
         format=input_frame.format.name,
@@ -164,7 +177,14 @@ def process_audio_frame_bytes(
     )
     output_frame.sample_rate = input_frame.sample_rate
     output_frame.time_base = input_frame.time_base
-    output_frame.pts = input_frame.pts
+    
+    # Adjust PTS based on the length change
+    if input_frame.pts is not None:
+        input_samples = input_frame_array.shape[1]
+        pts_scale = samples_per_channel / input_samples if input_samples > 0 else 1
+        output_frame.pts = int(input_frame.pts * pts_scale)
+    else:
+        output_frame.pts = input_frame.pts
 
     return output_frame
 
