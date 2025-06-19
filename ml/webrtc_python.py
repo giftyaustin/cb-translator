@@ -15,9 +15,20 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
 from av import AudioFrame
 from av.audio.fifo import AudioFifo
 
-#from seamlessm4t_translator_utils import translate_audio
-#from streaming_translator_utils import StatelessBytesTranslator
-#translator1 = StatelessBytesTranslator(tgt_lang="hin")  # Hindi output
+from seamlessm4t_translator_utils import translate_audio
+from streaming_translator_utils import SAMPLE_RATE, StatelessBytesTranslator
+translator1 = StatelessBytesTranslator(tgt_lang="hin")  # Hindi output
+
+from scipy import signal
+
+# resamples and converts from mono to stereo
+def resample_audio(audio_bytes, original_sr=16000, target_sr=48000):
+    audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
+    new_length = int(len(audio_data) * target_sr / original_sr)
+    resampled = signal.resample(audio_data, new_length)
+    resampled = np.clip(resampled, -32768, 32767).astype(np.int16)
+    stereo_data = np.column_stack((resampled, resampled)).flatten()
+    return stereo_data.tobytes()
 
 # numpy array to bytes
 def tensor_to_bytes(translated_wav):
@@ -178,13 +189,8 @@ def process_audio_frame_bytes(
     output_frame.sample_rate = input_frame.sample_rate
     output_frame.time_base = input_frame.time_base
     
-    # Adjust PTS based on the length change
-    if input_frame.pts is not None:
-        input_samples = input_frame_array.shape[1]
-        pts_scale = samples_per_channel / input_samples if input_samples > 0 else 1
-        output_frame.pts = int(input_frame.pts * pts_scale)
-    else:
-        output_frame.pts = input_frame.pts
+    # Let the fifo figure out the timig by itself in the output
+    output_frame.pts = None
 
     return output_frame
 
@@ -200,12 +206,56 @@ def save_wav_from_bytes(filename: str, audio_bytes: bytes, sample_rate=48000, nu
     logger.info(f"💾 Saved WAV file: {filepath}")
 
 # example function to pass to the process_audio_frame_bytes function. This one just calls save_wav_from_bytes
-def audio_bytes_function(chunk_bytes, sample_rate):
+def translate(chunk_bytes, sample_rate):
     logger.info(f"💾 About to save chunk: samples={len(chunk_bytes)}")
     timestamp = int(time.time() * 1000)
-    filename = f"chunk_{timestamp}.wav"
-    save_wav_from_bytes(filename, chunk_bytes, sample_rate=sample_rate, num_channels=2)
-    return chunk_bytes
+    save_wav_from_bytes(f"original_{timestamp}.wav", chunk_bytes, sample_rate=sample_rate, num_channels=2)
+
+    #### Original translation code provided ####
+    which_translator = 2
+
+    if which_translator == 1:
+        #seamelessm4T
+        sample_rate = 48000
+        start_time = time.time()
+        translated_wav, translated_sr = translate_audio(chunk_bytes, sample_width=2, frame_rate = sample_rate, channels = 2, tgt_lang = "hin")
+        end_time = time.time()
+        print(f"Inference time: {end_time-start_time: .4f} sec.")
+        print(translated_sr)
+        out_file = f"translated_raw_{time.time()}.wav"
+        #torchaudio.save(out_file, translated_wav, 16000)
+        #translated_segment = AudioSegment.from_wav(out_file)
+        #play(translated_segment)
+        #translated_wav = translated_wav.squeeze().cpu().numpy()
+        print(translated_wav)
+
+    if which_translator ==2:
+        #seamless_streaming
+        #audio_bytes = original_segment.raw_data
+        sample_width = 2
+        frame_rate = 48000
+        channels = 2
+        #print(f"Sample width: {sample_width}, Frame rate: {frame_rate}, Channels: {channels}")
+        start_time = time.time()
+        translated_wav, text = translator1.translate_chunk(
+            chunk_bytes,
+            input_sample_rate=frame_rate,
+            sample_width=sample_width,
+            channels=channels
+            )
+        end_time = time.time()
+        print(translated_wav, text)
+        print(f"Inference time: {end_time-start_time: .4f} sec.")
+        #if translated_wav is not None:
+            #translator1.play_audio(translated_wav)
+            #translator1.save_audio(translated_wav)
+        if text:
+            print("📝", text)
+    translated_audio_bytes = tensor_to_bytes(translated_wav)
+    resampled_audio_bytes = resample_audio(translated_audio_bytes, SAMPLE_RATE, sample_rate)
+    save_wav_from_bytes(f"translated_{timestamp}.wav", resampled_audio_bytes, sample_rate=sample_rate, num_channels=2)
+
+    return resampled_audio_bytes
 
 @routes.post("/offer")
 async def offer(request):
@@ -246,7 +296,7 @@ async def offer(request):
                         # reads chunk from the input queue
                         chunk_frame = fifo.read(samples=samples_per_batch)
                         # processes the chunk
-                        output_frame = process_audio_frame_bytes(chunk_frame, lambda audio_bytes:audio_bytes_function(audio_bytes, frame_rate))
+                        output_frame = process_audio_frame_bytes(chunk_frame, lambda audio_bytes:translate(audio_bytes, frame_rate))
                         # adds chunk to the output queue
                         playback_track.push_av_frame(output_frame)
 
