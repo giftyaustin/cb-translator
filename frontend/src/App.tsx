@@ -13,7 +13,14 @@ function App() {
 
   const joinMeeting = async () => {
     try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: { // Prioritizing raw unprocessed audio for testing
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        }
+      });
       setStream(mediaStream);
 
       await startMediasoup(roomCode, (remoteStream, kind) => {

@@ -15,9 +15,9 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
 from av import AudioFrame
 from av.audio.fifo import AudioFifo
 
-from seamlessm4t_translator_utils import translate_audio
-from streaming_translator_utils import StatelessBytesTranslator
-translator1 = StatelessBytesTranslator(tgt_lang="hin")  # Hindi output
+#from seamlessm4t_translator_utils import translate_audio
+#from streaming_translator_utils import StatelessBytesTranslator
+#translator1 = StatelessBytesTranslator(tgt_lang="hin")  # Hindi output
 
 # numpy array to bytes
 def tensor_to_bytes(translated_wav):
@@ -55,6 +55,7 @@ class ChunkedAudioStreamTrack(MediaStreamTrack):
     def update_info(self, sample_rate, samples_per_frame, format_name='s16', layout_name='stereo'):
         self.sample_rate = sample_rate
         self.samples_per_frame = samples_per_frame
+        self.frame_interval = samples_per_frame/sample_rate #used to guarantee proper timing when sending frames back
 
         # internal audio queue, used to send frames of correct size
         self.fifo = AudioFifo(  format=format_name,
@@ -62,7 +63,6 @@ class ChunkedAudioStreamTrack(MediaStreamTrack):
                                 rate=sample_rate)
         
     def _start_processing_thread(self):
-        """Start the frame processing thread"""
         if self._processing_thread is None or not self._processing_thread.is_alive():
             self._stop_event.clear()
             self._processing_thread = threading.Thread(
@@ -72,19 +72,32 @@ class ChunkedAudioStreamTrack(MediaStreamTrack):
             self._processing_thread.start()
 
     def _process_frames_loop(self):
-        """Thread loop that processes frames every 0.02 seconds"""
+        next_time = time.perf_counter() # Variable that controls when to send the next frame
+        
         while not self._stop_event.is_set():
             try:
+                # Send the frame
                 self.send_frame()
-                time.sleep(0.02)
-            except Exception as e:
-                logger.error(f"Error in processing thread: {e}")
-                break
 
+                # Calculate when to send the next frame
+                next_time += self.frame_interval
+                sleep_time = next_time - time.perf_counter()
+                
+                # Only sleep if theres time left
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                # Otherwise, set the time to send the next frame to now
+                else:
+                    next_time = time.perf_counter()
+
+            except Exception as e:
+                print(f"Error in processing thread: {e}")
+
+    # Simply writes the frame to the FIFO - processing happens in separate thread
     def push_av_frame(self, frame: AudioFrame):
-        """Simply write the frame to the FIFO - processing happens in separate thread"""
         self.fifo.write(frame)
     
+    # Function that actually takes a frame from the fifo and sends it
     def send_frame(self):
         if(self.fifo.samples >= self.samples_per_frame):
             chunk_frame = self.fifo.read(samples=self.samples_per_frame)
@@ -95,25 +108,28 @@ class ChunkedAudioStreamTrack(MediaStreamTrack):
             logger.info(f"📦 Pushed frame {chunk_frame}")
             self._queue_event.set()
 
+    # Function that receives a frame
     async def recv(self):
         while not self.frame_queue:
             self._queue_event.clear()
             await self._queue_event.wait()
         return self.frame_queue.popleft()
     
+    # Cleanup functions
     def stop(self):
-        """Stop the processing thread"""
         if self._processing_thread and self._processing_thread.is_alive():
             self._stop_event.set()
             self._processing_thread.join(timeout=1.0)
 
     def __del__(self):
-        """Cleanup when object is destroyed"""
         self.stop()
 
+# This function takes the audio frame, unwraps it to bytes and runs the
+# operation_func, a callable (function, lambda, etc.) that takes bytes and 
+# returns modified bytes in the same sample rate and datatype
 def process_audio_frame_bytes(
     input_frame: AudioFrame,
-    operation_func, # A callable (function, lambda, etc.) that takes bytes and returns modified bytes (such as a language translation model that returns the same ammount of bytes it receives)
+    operation_func, 
 ) -> AudioFrame:
     input_frame_array = input_frame.to_ndarray()
     input_shape = input_frame_array.shape
@@ -124,7 +140,7 @@ def process_audio_frame_bytes(
 
     if not isinstance(processed_bytes, bytes):
         raise TypeError("operation_func must return bytes.")
-    if len(processed_bytes) != expected_bytes_len:
+    if len(processed_bytes) != expected_bytes_len:  # TODO refactor function to handle outputs with different sizes
         raise ValueError(
             f"operation_func returned bytes of incorrect length. "
             f"Expected {expected_bytes_len}, got {len(processed_bytes)}."
@@ -152,6 +168,7 @@ def process_audio_frame_bytes(
 
     return output_frame
 
+# Function that saves wav files for debugging
 def save_wav_from_bytes(filename: str, audio_bytes: bytes, sample_rate=48000, num_channels=1, sample_width=2):
     os.makedirs("recordings", exist_ok=True)
     filepath = os.path.join("recordings", filename)
@@ -162,6 +179,7 @@ def save_wav_from_bytes(filename: str, audio_bytes: bytes, sample_rate=48000, nu
         wf.writeframes(audio_bytes)
     logger.info(f"💾 Saved WAV file: {filepath}")
 
+# example function to pass to the process_audio_frame_bytes function. This one just calls save_wav_from_bytes
 def audio_bytes_function(chunk_bytes, sample_rate):
     logger.info(f"💾 About to save chunk: samples={len(chunk_bytes)}")
     timestamp = int(time.time() * 1000)
@@ -197,25 +215,23 @@ async def offer(request):
                         fifo = AudioFifo(format=frame.format.name,
                                          layout=frame.layout.name,
                                          rate=frame_rate)
-                        samples_per_chunk = int(chunk_duration * frame_rate)
+                        samples_per_batch= int(chunk_duration * frame_rate)
                         playback_track.update_info(frame_rate, frame.samples, frame.format.name, frame.layout.name)
-                        logger.info(f"Initialized AudioFifo: sample_rate={frame_rate}, samples_per_chunk={samples_per_chunk}")
+                        logger.info(f"Initialized AudioFifo: sample_rate={frame_rate}, samples_per_chunk={samples_per_batch}")
 
                     fifo.write(frame)
                     logging.info(f"received frame: {frame}")
 
-                    while fifo.samples >= samples_per_chunk:
-                        chunk_frame = fifo.read(samples=samples_per_chunk)
+                    while fifo.samples >= samples_per_batch:
+                        # reads chunk from the input queue
+                        chunk_frame = fifo.read(samples=samples_per_batch)
+                        # processes the chunk
                         output_frame = process_audio_frame_bytes(chunk_frame, lambda audio_bytes:audio_bytes_function(audio_bytes, frame_rate))
-
-                        # Send chunk back over WebRTC
-                        logging.info("Starting streaming back")
+                        # adds chunk to the output queue
                         playback_track.push_av_frame(output_frame)
 
             except Exception as e:
                 logger.error(f"❌ Error while receiving audio: {e}", exc_info=True)
-
-
 
     @pc.on("connectionstatechange")
     async def on_connection_state_change():
@@ -225,7 +241,6 @@ async def offer(request):
             await pc.close()
 
     await pc.setRemoteDescription(offer)
-
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
@@ -237,11 +252,9 @@ async def offer(request):
         })
     )
 
-
 async def on_shutdown(app):
     logger.info("💤 Closing peer connections")
     await asyncio.gather(*(pc.close() for pc in pcs))
-
 
 app = web.Application()
 app.add_routes(routes)
