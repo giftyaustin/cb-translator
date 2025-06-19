@@ -15,11 +15,7 @@ function App() {
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: true,
-        audio: { // Prioritizing raw unprocessed audio for testing
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false
-        }
+        audio: true
       });
       setStream(mediaStream);
 
