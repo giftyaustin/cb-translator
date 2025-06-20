@@ -15,10 +15,6 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
 from av import AudioFrame
 from av.audio.fifo import AudioFifo
 
-from seamlessm4t_translator_utils import translate_audio
-from streaming_translator_utils import SAMPLE_RATE, StatelessBytesTranslator
-translator1 = StatelessBytesTranslator(tgt_lang="hin")  # Hindi output
-
 from scipy import signal
 
 # resamples and converts from mono to stereo
@@ -210,52 +206,7 @@ def translate(chunk_bytes, sample_rate):
     logger.info(f"💾 About to save chunk: samples={len(chunk_bytes)}")
     timestamp = int(time.time() * 1000)
     save_wav_from_bytes(f"original_{timestamp}.wav", chunk_bytes, sample_rate=sample_rate, num_channels=2)
-
-    #### Original translation code provided ####
-    which_translator = 2
-
-    if which_translator == 1:
-        #seamelessm4T
-        sample_rate = 48000
-        start_time = time.time()
-        translated_wav, translated_sr = translate_audio(chunk_bytes, sample_width=2, frame_rate = sample_rate, channels = 2, tgt_lang = "hin")
-        end_time = time.time()
-        print(f"Inference time: {end_time-start_time: .4f} sec.")
-        print(translated_sr)
-        out_file = f"translated_raw_{time.time()}.wav"
-        #torchaudio.save(out_file, translated_wav, 16000)
-        #translated_segment = AudioSegment.from_wav(out_file)
-        #play(translated_segment)
-        #translated_wav = translated_wav.squeeze().cpu().numpy()
-        print(translated_wav)
-
-    if which_translator ==2:
-        #seamless_streaming
-        #audio_bytes = original_segment.raw_data
-        sample_width = 2
-        frame_rate = 48000
-        channels = 2
-        #print(f"Sample width: {sample_width}, Frame rate: {frame_rate}, Channels: {channels}")
-        start_time = time.time()
-        translated_wav, text = translator1.translate_chunk(
-            chunk_bytes,
-            input_sample_rate=frame_rate,
-            sample_width=sample_width,
-            channels=channels
-            )
-        end_time = time.time()
-        print(translated_wav, text)
-        print(f"Inference time: {end_time-start_time: .4f} sec.")
-        #if translated_wav is not None:
-            #translator1.play_audio(translated_wav)
-            #translator1.save_audio(translated_wav)
-        if text:
-            print("📝", text)
-    translated_audio_bytes = tensor_to_bytes(translated_wav)
-    resampled_audio_bytes = resample_audio(translated_audio_bytes, SAMPLE_RATE, sample_rate)
-    save_wav_from_bytes(f"translated_{timestamp}.wav", resampled_audio_bytes, sample_rate=sample_rate, num_channels=2)
-
-    return resampled_audio_bytes
+    return chunk_bytes
 
 @routes.post("/offer")
 async def offer(request):
