@@ -106,7 +106,7 @@ class ChunkedAudioStreamTrack(MediaStreamTrack):
     
     # Function that actually takes a frame from the fifo and sends it
     def send_frame(self):
-        if(self.fifo.samples >= self.samples_per_frame):
+        if(self.fifo.samples > 0):
             chunk_frame = self.fifo.read(samples=self.samples_per_frame)
             chunk_frame.time_base = fractions.Fraction(1, self.sample_rate)
             chunk_frame.pts = self.timestamp
@@ -139,9 +139,7 @@ def process_audio_frame_bytes(
     operation_func, 
 ) -> AudioFrame:
     input_frame_array = input_frame.to_ndarray()
-    input_shape = input_frame_array.shape
     audio_bytes = input_frame_array.tobytes()
-    expected_bytes_len = len(audio_bytes)
 
     processed_bytes = operation_func(audio_bytes)
 
