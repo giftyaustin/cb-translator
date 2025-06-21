@@ -8,19 +8,22 @@ import os
 import time
 from collections import deque
 import threading
-
+import torch
+import torchaudio
 from aiohttp import web
 import aiohttp_cors
 from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
 from av import AudioFrame
 from av.audio.fifo import AudioFifo
 
-#from seamlessm4t_translator_utils import translate_audio
-#from streaming_translator_utils import StatelessBytesTranslator
-#translator1 = StatelessBytesTranslator(tgt_lang="hin")  # Hindi output
+#initialization of seamless translation models 
+from seamlessm4t_translator_utils import translate_audio
+from streaming_translator_utils import StatelessBytesTranslator
+translator1 = StatelessBytesTranslator(tgt_lang="hin")  # Hindi output
 
 # numpy array to bytes
-def tensor_to_bytes(translated_wav):
+# numpy array to bytes
+def tensor_to_bytes_original(translated_wav):
     # 1. Assume this is your audio in float32 format (range -1.0 to 1.0)
     audio_np = np.array(translated_wav, dtype=np.float32)
     # 2. Clip to [-1, 1] just in case
@@ -30,6 +33,32 @@ def tensor_to_bytes(translated_wav):
     # 4. Convert to raw PCM bytes
     translated_audio_bytes = audio_int16.tobytes()
     return translated_audio_bytes
+def tensor_to_bytes(translated_wav, input_sr=16000, output_sr=48000, output_channels=2):
+    # Step 1: Convert to torch.Tensor if not already
+    if not isinstance(translated_wav, torch.Tensor):
+        translated_wav = torch.tensor(translated_wav)
+
+    # Step 2: Ensure shape = (1, N), i.e., mono
+    if translated_wav.dim() == 1:
+        translated_wav = translated_wav.unsqueeze(0)
+    elif translated_wav.size(0) > 1:
+        translated_wav = translated_wav.mean(dim=0, keepdim=True)  # force mono
+
+    # Step 3: Resample to 48kHz
+    resampler = torchaudio.transforms.Resample(orig_freq=input_sr, new_freq=output_sr)
+    wav_48k = resampler(translated_wav)
+
+    # Step 4: Mono to Stereo (duplicate channel)
+    if output_channels == 2:
+        wav_48k = wav_48k.repeat(2, 1)
+
+    # Step 5: Clamp and convert to int16 PCM
+    wav_48k = torch.clamp(wav_48k, -1.0, 1.0)
+    wav_int16 = (wav_48k * 32767.0).to(torch.int16)
+
+    # Step 6: Convert to bytes
+    return wav_int16.transpose(0, 1).contiguous().numpy().tobytes()
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -136,7 +165,11 @@ def process_audio_frame_bytes(
     audio_bytes = input_frame_array.tobytes()
     expected_bytes_len = len(audio_bytes)
 
-    processed_bytes = operation_func(audio_bytes)
+    processed_bytes, processed_bytes_original = operation_func(audio_bytes)
+    #processed_bytes = processed_bytes + processed_bytes
+    filename = f"processed_{time.time()}.wav"
+    save_wav_from_bytes(filename, processed_bytes, 48000, 2, 2)
+    save_wav_from_bytes("_processed.wav", processed_bytes_original, 16000, 1, 2)
 
     if not isinstance(processed_bytes, bytes):
         raise TypeError("operation_func must return bytes.")
@@ -178,14 +211,14 @@ def process_audio_frame_bytes(
     output_frame.sample_rate = input_frame.sample_rate
     output_frame.time_base = input_frame.time_base
     
-    # Adjust PTS based on the length change
-    if input_frame.pts is not None:
-        input_samples = input_frame_array.shape[1]
-        pts_scale = samples_per_channel / input_samples if input_samples > 0 else 1
-        output_frame.pts = int(input_frame.pts * pts_scale)
-    else:
-        output_frame.pts = input_frame.pts
-
+    # # Adjust PTS based on the length change
+    # if input_frame.pts is not None:
+    #     input_samples = input_frame_array.shape[1]
+    #     pts_scale = samples_per_channel / input_samples if input_samples > 0 else 1
+    #     output_frame.pts = int(input_frame.pts * pts_scale)
+    # else:
+    #     output_frame.pts = input_frame.pts
+    output_frame.pts = None
     return output_frame
 
 # Function that saves wav files for debugging
@@ -203,9 +236,13 @@ def save_wav_from_bytes(filename: str, audio_bytes: bytes, sample_rate=48000, nu
 def audio_bytes_function(chunk_bytes, sample_rate):
     logger.info(f"💾 About to save chunk: samples={len(chunk_bytes)}")
     timestamp = int(time.time() * 1000)
+    # translate here
+    translated_wav, translated_sr = translate_audio(chunk_bytes, sample_width=2, frame_rate = sample_rate, channels = 2, tgt_lang = "hin")
+    processed_bytes_original = tensor_to_bytes_original(translated_wav)
+    processed_bytes = tensor_to_bytes(translated_wav)
     filename = f"chunk_{timestamp}.wav"
-    save_wav_from_bytes(filename, chunk_bytes, sample_rate=sample_rate, num_channels=2)
-    return chunk_bytes
+    #save_wav_from_bytes(filename, chunk_bytes, sample_rate=sample_rate, num_channels=2)
+    return processed_bytes, processed_bytes_original
 
 @routes.post("/offer")
 async def offer(request):
