@@ -4,7 +4,8 @@ import {
   Button,
   Text,
   TextInput,
-  StyleSheet
+  StyleSheet,
+  Platform
 } from 'react-native';
 import {
   RTCPeerConnection,
@@ -12,7 +13,13 @@ import {
   mediaDevices,
   MediaStream,
 } from 'react-native-webrtc';
+import {
+  request,
+  PERMISSIONS,
+  RESULTS,
+} from 'react-native-permissions';
 import { startMediasoup, startStreaming } from './mediasoupClient';
+
 
 
 export default function App() {
@@ -21,6 +28,63 @@ export default function App() {
   const [roomCode, setRoomCode] = useState('a');
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<MediaStream[]>([]);
+
+  useEffect(() => {
+    requestPermissions();
+    testServerConnectivity();
+  }, []);
+
+  const testServerConnectivity = async () => {
+    const servers = [
+      { name: 'Server 1 (Port 8000)', url: 'http://10.0.2.2:8000' },
+      { name: 'Server 2 (Port 3000)', url: 'http://10.0.2.2:3000' },
+    ];
+
+    for (const server of servers) {
+      try {
+        const response = await fetch(server.url);
+        if (response.ok) {
+          console.log(`${server.name} is accessible`);
+        } else {
+          console.log(`${server.name} returned an error`);
+        }
+      } catch (error) {
+        console.error(`${server.name} is not accessible`, error);
+      }
+    }
+  };
+
+  const requestPermissions = async () => {
+    try {
+      // Request Camera Permission
+      const cameraStatus = await request(
+        Platform.OS === 'ios'
+          ? PERMISSIONS.IOS.CAMERA
+          : PERMISSIONS.ANDROID.CAMERA
+      );
+
+      if (cameraStatus === RESULTS.GRANTED) {
+        console.log('Camera permission granted');
+      } else {
+        console.log('Camera permission denied');
+      }
+
+      // Request Microphone Permission
+      const microphoneStatus = await request(
+        Platform.OS === 'ios'
+          ? PERMISSIONS.IOS.MICROPHONE
+          : PERMISSIONS.ANDROID.RECORD_AUDIO
+      );
+
+      if (microphoneStatus === RESULTS.GRANTED) {
+        console.log('Microphone permission granted');
+      } else {
+        console.log('Microphone permission denied');
+      }
+    } catch (error) {
+      console.error('Error requesting permissions:', error);
+    }
+  };
 
   const joinMeeting = async () => {
     try {
@@ -38,7 +102,7 @@ export default function App() {
       setJoined(true);
     } catch (err: any) {
       console.error('Join failed:', err);
-      setError(err.message);
+      setError(err.message || 'An unknown error occurred');
     }
   };
 

@@ -1,5 +1,5 @@
 import * as mediasoupClient from 'mediasoup-client';
-import { MediaStream, MediaStreamTrack, RTCPeerConnection } from 'react-native-webrtc';
+import { MediaStream, MediaStreamTrack, RTCPeerConnection, registerGlobals } from 'react-native-webrtc';
 import { socket } from './socket';
 
 let device: mediasoupClient.Device;
@@ -16,6 +16,7 @@ export async function startMediasoup(
     socket.emit('get-rtp-capabilities');
 
     socket.once('rtp-capabilities', async (rtpCapabilities) => {
+      registerGlobals();
       device = new mediasoupClient.Device();
       await device.load({ routerRtpCapabilities: rtpCapabilities });
 
@@ -24,9 +25,16 @@ export async function startMediasoup(
       socket.once('transport-created-send', async (params) => {
         sendTransport = device.createSendTransport(params);
 
-        sendTransport.on('connect', ({ dtlsParameters }, callback) => {
-          socket.emit('connect-transport-send', { dtlsParameters });
-          socket.once('transport-connected-send', callback);
+        sendTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+          try {
+            socket.emit('connect-transport-send', { dtlsParameters });
+            socket.once('transport-connected-send', () => {
+              callback();
+            });
+          } catch (error) {
+            console.error('Error connecting transport:', error);
+            errback(error as Error);
+          }
         });
 
         sendTransport.on('produce', (params, callback) => {
@@ -59,7 +67,11 @@ export async function startMediasoup(
 
 export async function startStreaming(stream: MediaStream, roomCode: string) {
   for (const track of stream.getTracks()) {
-    await sendTransport.produce({ track });
+    try {
+      await sendTransport.produce({ track });
+    } catch (error) {
+      console.error('Error creating producer:', error);
+    }
   }
 }
 
@@ -85,7 +97,7 @@ async function consume(
 
     const stream = new MediaStream([consumer.track]);
     onNewConsumerStream(stream, kind);
-
+    
     // OPTIONAL: You can send to Python server if needed
     // if (kind === 'audio') await sendAudioToPython(consumer.track);
     // if (kind === 'video') await sendVideoToPython(consumer.track);
@@ -114,7 +126,11 @@ export async function setupPeerConnection(audioTrack?: MediaStreamTrack) {
   }
 
   if (audioTrack) {
-    pc.addTransceiver(audioTrack, { direction: 'sendrecv' });
+    try {
+      pc.addTransceiver(audioTrack, { direction: 'sendrecv' });
+    } catch (error) {
+      console.error('Error adding transceiver:', error);
+    }
   }
 
   await negotiate();
@@ -137,7 +153,7 @@ async function negotiate() {
       }
     });
 
-    const response = await fetch('https://localhost:8000/offer', {
+    const response = await fetch('https://10.0.2.2:8000/offer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(pc!.localDescription),
@@ -154,11 +170,15 @@ async function negotiate() {
 
 export async function sendAudioToPython(audioTrack: MediaStreamTrack) {
   if (!pc) {
-    console.log('📡 Initializing peer connection with audio');
+    console.log('📡 Initializing peer connection with local audio');
     await setupPeerConnection(audioTrack);
   } else {
-    pc.addTransceiver(audioTrack, { direction: 'sendrecv' });
-    await negotiate();
+    try {
+      pc.addTransceiver(audioTrack, { direction: 'sendrecv' });
+      await negotiate();
+    } catch (error) {
+      console.error('Error adding transceiver:', error);
+    }
   }
 }
 

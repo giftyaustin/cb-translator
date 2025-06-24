@@ -206,6 +206,15 @@ def translate(chunk_bytes, sample_rate):
     save_wav_from_bytes(f"original_{timestamp}.wav", chunk_bytes, sample_rate=sample_rate, num_channels=2)
     return chunk_bytes
 
+# used for testing the connection from mobile
+@routes.get("/")
+async def test(request):
+    logger.info("📥 Received test GET request")
+    return web.Response(
+        content_type="application/json",
+        text=json.dumps({"message": "Test GET request successful!"})
+    )
+    
 @routes.post("/offer")
 async def offer(request):
     params = await request.json()

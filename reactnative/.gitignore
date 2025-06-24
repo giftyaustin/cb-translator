@@ -1,0 +1,105 @@
+# Node.js dependencies
+/node_modules/
+/npm-debug.log*
+/yarn-debug.log*
+/yarn-error.log*
+
+# React Native Packager
+/ios/build/
+/ios/Pods/
+/android/.gradle/
+/android/app/build/
+/android/build/
+/android/local.properties
+/android/.idea/
+/android/.cxx/
+/android/app/.cxx/
+
+# Logs
+*.log
+*.log.*
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# Testing
+/coverage/
+
+# React Native specific
+.expo/
+/.expo-shared/
+*.expo
+*.expo-shared
+*.expo-shared.json
+*.expo-shared.yaml
+*.expo-shared.yml
+*.expo-shared.toml
+*.expo-shared.ini
+
+# Metro bundler
+.expo-shared
+.expo-shared.json
+.expo-shared.yaml
+.expo-shared.yml
+.expo-shared.toml
+.expo-shared.ini
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# Build artifacts
+*.apk
+*.aab
+*.ipa
+*.app
+*.dSYM
+*.so
+*.dll
+*.exe
+*.o
+*.obj
+*.class
+*.pyc
+*.pyo
+*.pyd
+*.whl
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+*.iml
+*.ipr
+*.iws
+*.class
+*.pyc
+*.pyo
+*.pyd
+*.whl
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+*.iml
+*.ipr
+*.iws
