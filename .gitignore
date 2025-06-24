@@ -1,0 +1,252 @@
+# Node modules
+node_modules/
+
+# Dependency lock files (optional: only if you don't want to track them)
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.*.local
+
+# Coverage reports
+coverage/
+*.lcov
+
+# Build outputs
+dist/
+build/
+.cache/
+.next/
+out/
+.temp/
+.astro/
+
+# IDE configs
+.vscode/
+.idea/
+*.swp
+
+# Others
+*.log
+*.tgz
+*.gz
+*.zip
+
+# TypeScript
+*.tsbuildinfo
+
+# Misc
+.parcel-cache/
+eslintcache
+
+
+
+# react native
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+.yarn-integrity
+.pnpm-debug.log*
+
+# Metro
+.expo/
+.expo-shared/
+*.expo
+.expo/*
+
+# Build
+dist/
+build/
+tmp/
+temp/
+*.tmp
+
+# React Native bundler
+*.bundle
+*.map
+*.assets
+*.hbc
+
+# Watchman
+.watchmanconfig
+
+# Android
+android/.gradle/
+android/app/build/
+android/build/
+android/.idea
+android/local.properties
+android/.settings/
+android/.externalNativeBuild
+android/.cxx
+android/gradle.properties
+android/gradlew
+android/gradlew.bat
+android/gradle/
+android/*.iml
+
+# iOS
+ios/Pods/
+ios/Podfile.lock
+ios/build/
+ios/*.xcworkspace
+ios/*.xcodeproj/project.xcworkspace/
+ios/*.xcodeproj/xcuserdata/
+ios/*.xcodeproj/project.xcuserdatad/
+ios/.xcode.env
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xcuserstate
+
+# Xcode
+xcuserdata/
+DerivedData/
+*.hmap
+*.ipa
+
+# macOS
+.DS_Store
+
+# VSCode / IDEs
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# CocoaPods
+ios/Pods/
+Podfile.lock
+
+# JetBrains IDEs
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# Misc
+.env
+.env.*
+*.keystore
+*.jks
+
+# EAS / Expo
+*.expo/*
+*.expo-shared/*
+
+# Storybook
+storybook-static/
+
+# Temporary files
+*.swp
+*~
+
+
+
+# OSX
+#
+.DS_Store
+
+
+package-lock.json
+yarn.lock
+
+
+# Xcode
+#
+build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata
+*.xccheckout
+*.moved-aside
+DerivedData
+*.hmap
+*.ipa
+*.xcuserstate
+**/.xcode.env.local
+
+# Android/IntelliJ
+#
+build/
+.idea
+.gradle
+local.properties
+*.iml
+*.hprof
+.cxx/
+*.keystore
+!debug.keystore
+.kotlin/
+
+# node.js
+#
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# fastlane
+#
+# It is recommended to not store the screenshots in the git repo. Instead, use fastlane to re-generate the
+# screenshots whenever they are needed.
+# For more information about the recommended setup visit:
+# https://docs.fastlane.tools/best-practices/source-control/
+
+**/fastlane/report.xml
+**/fastlane/Preview.html
+**/fastlane/screenshots
+**/fastlane/test_output
+
+# Bundle artifact
+*.jsbundle
+
+# Ruby / CocoaPods
+**/Pods/
+/vendor/bundle/
+
+# Temporary files created by Metro to check the health of the file watcher
+.metro-health-check*
+
+# testing
+/coverage
+
+# Yarn
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions

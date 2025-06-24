@@ -1,0 +1,5 @@
+aiortc
+aiohttp_cors
+pydub
+torch
+gi
