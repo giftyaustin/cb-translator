@@ -5,13 +5,16 @@ import numpy as np
 import fractions
 import wave
 import os
+import av
 import time
 from collections import deque
+import ssl
 
 from aiohttp import web
 import aiohttp_cors
 from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
 from av import AudioFrame
+from av import VideoFrame
 from av.audio.fifo import AudioFifo
 
 logging.basicConfig(level=logging.INFO)
@@ -27,7 +30,7 @@ class ChunkedAudioStreamTrack(MediaStreamTrack):
     def __init__(self, sample_rate=48000):
         super().__init__()
         self.sample_rate = sample_rate
-        self.samples_per_frame = 960 * 2
+        self.samples_per_frame = 960
         self.frame_queue = deque()
         self.timestamp = 0
         self._queue_event = asyncio.Event()
@@ -40,7 +43,7 @@ class ChunkedAudioStreamTrack(MediaStreamTrack):
             frame_samples = samples[:, i: i+self.samples_per_frame]
             if frame_samples.shape[1] < self.samples_per_frame:
                 pad_width = self.samples_per_frame - frame_samples.shape[1]
-                frame_samples = np.pad(frame_samples, ((0, 0), (0, pad_width)), mode='constant')
+                # frame_samples = np.pad(frame_samples, ((0, 0), (0, pad_width)), mode='constant')
             # logging.info(f"==================== {frame_samples.shape}")
             frame = AudioFrame.from_ndarray(frame_samples, format="s16", layout="stereo")
             frame.sample_rate = self.sample_rate
@@ -49,7 +52,6 @@ class ChunkedAudioStreamTrack(MediaStreamTrack):
             self.timestamp += self.samples_per_frame
 
             self.frame_queue.append(frame)
-            logging.info(f"📦 Pushed frame {frame}")
             self._queue_event.set()
 
     async def recv(self):
@@ -59,7 +61,7 @@ class ChunkedAudioStreamTrack(MediaStreamTrack):
 
         frame = self.frame_queue.popleft()
         frame_time = self.samples_per_frame / self.sample_rate
-        await asyncio.sleep(frame_time)
+        # await asyncio.sleep(frame_time)
         return frame
 
 
@@ -72,6 +74,70 @@ def save_wav_from_bytes(filename: str, audio_bytes: bytes, sample_rate=48000, nu
         wf.setframerate(sample_rate)
         wf.writeframes(audio_bytes)
     logger.info(f"💾 Saved WAV file: {filepath}")
+    
+    
+    
+def save_video_chunk_mkv(frames, filename, frame_rate):
+    os.makedirs("recordings", exist_ok=True)
+    filename = filename.replace('.mp4', '.mkv')  # Ensure correct extension
+
+    logger.info(f"💾 Saving video chunk to {filename} with {len(frames)} frames")
+
+    container = av.open(filename, mode='w', format='matroska')
+    stream = container.add_stream('libx264', rate=frame_rate)
+    stream.width = frames[0].width
+    stream.height = frames[0].height
+    stream.pix_fmt = 'yuv420p'
+
+    for frame in frames:
+        if not isinstance(frame, av.VideoFrame):
+            frame = av.VideoFrame.from_ndarray(frame.to_ndarray(), format='bgr24')
+
+        for packet in stream.encode(frame):
+            container.mux(packet)
+
+    # Flush encoder
+    for packet in stream.encode():
+        container.mux(packet)
+
+    container.close()
+    logger.info(f"✅ Saved {filename}")
+
+
+    
+async def handle_video(track: MediaStreamTrack):
+    logger.info("📹 Video track handler initialized")
+
+    chunk_duration = 5.0
+    frame_rate = 30  # Default fallback
+    frames_per_chunk = int(chunk_duration * frame_rate)
+    fifo = []
+    logging.info(await track.recv())
+
+    try:
+        while True:
+            frame:VideoFrame = await track.recv()
+            frame_rate = frame_rate
+            frames_per_chunk = int(chunk_duration * frame_rate)
+
+            fifo.append(frame)
+
+            if len(fifo) >= frames_per_chunk:
+                timestamp = int(time.time() * 1000)
+                filename = f"recordings/video_chunk_{timestamp}.mp4"
+                save_video_chunk_mkv(fifo, filename, frame_rate)
+                fifo.clear()
+
+    except Exception as e:
+        logger.error(f"❌ Error in video handler: {e}", exc_info=True)
+
+
+
+@routes.get("/test")
+async def test(request):
+    # logger.info("✅ Test endpoint hit by client!")
+    return web.json_response({"status": "ok", "message": "Translator WebRTC server is reachable"})
+
 
 
 @routes.post("/offer")
@@ -90,7 +156,7 @@ async def offer(request):
     @pc.on("track")
     async def on_track(track: MediaStreamTrack):
         logger.info(f"🎤 Track received: kind={track.kind}")
-        if track.kind == "audio":
+        if track.kind == "audio": # !! change this to "audio" to match the correct kind
             fifo = None
             chunk_duration = 5.0
             try:
@@ -108,7 +174,6 @@ async def offer(request):
                         logger.info(f"Initialized AudioFifo: sample_rate={sample_rate}, samples_per_chunk={samples_per_chunk}")
 
                     fifo.write(frame)
-                    logging.info(f"received frame: {frame}")
 
                     while fifo.samples >= samples_per_chunk:
                         chunk_frame = fifo.read(samples=samples_per_chunk)
@@ -128,7 +193,8 @@ async def offer(request):
             except Exception as e:
                 logger.error(f"❌ Error while receiving audio: {e}", exc_info=True)
 
-
+        if track.kind == "video":
+            await handle_video(track)
 
     @pc.on("connectionstatechange")
     async def on_connection_state_change():
@@ -172,4 +238,7 @@ for route in list(app.router.routes()):
 
 if __name__ == "__main__":
     logger.info("Starting WebRTC server on port 8000")
-    web.run_app(app, port=8000)
+    # ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    # ssl_ctx.load_cert_chain(certfile="cert.pem", keyfile="cert-key.pem")
+    # web.run_app(app, port=8000, ssl_context=ssl_ctx) 
+    web.run_app(app, port=8000)  

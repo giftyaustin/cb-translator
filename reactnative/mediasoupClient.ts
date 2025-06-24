@@ -1,4 +1,5 @@
 import * as mediasoupClient from 'mediasoup-client';
+import { MediaStream, MediaStreamTrack, RTCPeerConnection } from 'react-native-webrtc';
 import { socket } from './socket';
 
 let device: mediasoupClient.Device;
@@ -10,7 +11,7 @@ let pc: RTCPeerConnection | null = null;
 export async function startMediasoup(
   roomCode: string,
   onNewConsumerStream: (stream: MediaStream, kind: string) => void
-) {
+): Promise<void> {
   return new Promise<void>((resolve) => {
     socket.emit('get-rtp-capabilities');
 
@@ -18,7 +19,7 @@ export async function startMediasoup(
       device = new mediasoupClient.Device();
       await device.load({ routerRtpCapabilities: rtpCapabilities });
 
-      // Create Send Transport
+      // Send Transport
       socket.emit('create-transport', { direction: 'send' });
       socket.once('transport-created-send', async (params) => {
         sendTransport = device.createSendTransport(params);
@@ -35,7 +36,7 @@ export async function startMediasoup(
           });
         });
 
-        // Create Recv Transport
+        // Recv Transport
         socket.emit('create-transport', { direction: 'recv' });
         socket.once('transport-created-recv', async (recvParams) => {
           recvTransport = device.createRecvTransport(recvParams);
@@ -85,25 +86,19 @@ async function consume(
     const stream = new MediaStream([consumer.track]);
     onNewConsumerStream(stream, kind);
 
-    if (kind === 'audio') {
-      const track = stream.getAudioTracks()[0];
-      if (track) {
-        await sendAudioToPython(track);
-      }
-    }
-    if (kind === 'video') {
-      const track = stream.getVideoTracks()[0];
-      if (track) {
-        await sendVideoToPython(track);
-      }
-    }
+    // OPTIONAL: You can send to Python server if needed
+    // if (kind === 'audio') await sendAudioToPython(consumer.track);
+    // if (kind === 'video') await sendVideoToPython(consumer.track);
   });
 }
 
+// ---------------------------
+// WebRTC PeerConnection helpers (if needed)
+// ---------------------------
 export async function setupPeerConnection(audioTrack?: MediaStreamTrack) {
   if (!pc) {
     pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     });
 
     pc.onicecandidate = (event) => {
@@ -113,28 +108,13 @@ export async function setupPeerConnection(audioTrack?: MediaStreamTrack) {
     };
 
     pc.ontrack = (event) => {
-      console.log('🎤 Received track from server:', event.track.kind);
-
-      const stream = event.streams[0] || new MediaStream([event.track]);
-
-      if (event.track.kind === 'audio') {
-        const audioElement = document.createElement("audio");
-        audioElement.autoplay = true;
-        audioElement.controls = true;
-        audioElement.srcObject = stream;
-        document.body.appendChild(audioElement);
-
-        audioElement.play().then(() => {
-          console.log('▶️ Playing audio from server');
-        }).catch(err => {
-          console.error('❌ Error playing audio:', err);
-        });
-      }
+      console.log(`🎤 Received ${event.track.kind} track`);
+      // In React Native, audio will just play if attached to a stream and bound to RTCView (video)
     };
   }
 
   if (audioTrack) {
-    pc.addTransceiver(audioTrack, { direction: "sendrecv" });
+    pc.addTransceiver(audioTrack, { direction: 'sendrecv' });
   }
 
   await negotiate();
@@ -145,13 +125,13 @@ async function negotiate() {
     const offer = await pc!.createOffer();
     await pc!.setLocalDescription(offer);
 
-    await new Promise((resolve) => {
+    await new Promise<void>((resolve) => {
       if (pc!.iceGatheringState === 'complete') {
-        resolve(null);
+        resolve();
       } else {
         pc!.onicegatheringstatechange = () => {
           if (pc!.iceGatheringState === 'complete') {
-            resolve(null);
+            resolve();
           }
         };
       }
@@ -160,37 +140,34 @@ async function negotiate() {
     const response = await fetch('https://localhost:8000/offer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(pc!.localDescription)
+      body: JSON.stringify(pc!.localDescription),
     });
 
     const answer = await response.json();
     await pc!.setRemoteDescription(answer);
 
-    console.log('✅ Peer connection established / renegotiated');
+    console.log('✅ Peer connection negotiated');
   } catch (err) {
-    console.error('❌ Negotiation error:', err);
+    console.error('❌ Negotiation failed:', err);
   }
 }
 
 export async function sendAudioToPython(audioTrack: MediaStreamTrack) {
   if (!pc) {
-    console.log('📡 Setting up peer connection with audio track...');
+    console.log('📡 Initializing peer connection with audio');
     await setupPeerConnection(audioTrack);
   } else {
-    console.log('📡 Adding track and renegotiating...');
-    pc.addTransceiver(audioTrack, { direction: "sendrecv" });
+    pc.addTransceiver(audioTrack, { direction: 'sendrecv' });
     await negotiate();
   }
 }
 
-
 export async function sendVideoToPython(videoTrack: MediaStreamTrack) {
   if (!pc) {
-    console.log('📹 Setting up peer connection with video track...');
+    console.log('📹 Initializing peer connection with video');
     await setupPeerConnection();
   } else {
-    console.log('📹 Adding video track and renegotiating...');
-    pc.addTransceiver(videoTrack, { direction: "sendrecv" });
+    pc.addTransceiver(videoTrack, { direction: 'sendrecv' });
     await negotiate();
   }
 }
