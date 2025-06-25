@@ -8,6 +8,7 @@ import time
 import wave
 import uuid
 import socket
+from subprocess import Popen
 
 def get_free_port():
     """Finds a free UDP port."""
@@ -77,23 +78,22 @@ def run_ffmpeg_input(sdp_path):
     )
 
 
-def run_ffmpeg_output(target_ip, target_port):
-    return subprocess.Popen(
-        [
-            "ffmpeg",
-            "-f", "s16le",
-            "-ar", "48000",
-            "-ac", "2",
-            "-i", "pipe:0",
-            "-c:a", "libopus",
-            "-payload_type", "100",
-            "-f", "rtp",
-            f"rtp://{target_ip}:{target_port}",
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
+def run_ffmpeg_output(target_ip: str, target_port: InterruptedError,
+                      payload_type: int, ssrc: int):
+    cmd = [
+      "ffmpeg",
+      "-f","s16le", "-ar","48000","-ac","2",
+      "-i","pipe:0",
+      "-c:a","libopus",
+      "-payload_type", str(payload_type),
+      "-ssrc",str(ssrc),
+      "-f","rtp",
+      f"rtp://{target_ip}:{target_port}"
+    ]
+    return subprocess.Popen(cmd,
+                            stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE)
 
 def print_ffmpeg_logs(proc, label):
     for line in iter(proc.stderr.readline, b""):
@@ -102,18 +102,18 @@ def print_ffmpeg_logs(proc, label):
         if "error" in text.lower():
             print(f"{label}: {text}")
 
-def pump_audio(ff_in, ff_out, segment_size, sdp_path):
+def pump_audio(ff_in: Popen[bytes], ff_out: Popen[bytes], segment_size: int, sdp_path: str):
     buf = b""
     try:
         while True:
             chunk = ff_in.stdout.read(4096)
             if not chunk:
-                print('stopping now')
+                print('empty chunk, stopping')
                 break
             buf += chunk
             while len(buf) >= segment_size:
                 seg, buf = buf[:segment_size], buf[segment_size:]
-                save_to_wav(seg)
+                #save_to_wav(seg)
                 print(f"📦 Processed segment: {len(seg)} bytes")
                 try:
                     ff_out.stdin.write(seg)
@@ -165,7 +165,7 @@ async def on_translation_initiate(data):
     )
 
     ff_in = run_ffmpeg_input(sdp_path)
-    ff_out = run_ffmpeg_output("127.0.0.1", data["rtpPort"] + 1)
+    ff_out = run_ffmpeg_output("127.0.0.1", data["rtpPort"] + 1, data["payloadType"], data["ssrc"])
 
     # Log FFmpeg stderr in the background
     threading.Thread(
