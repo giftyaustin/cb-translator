@@ -7,15 +7,35 @@ import threading
 import time
 import wave
 import uuid
-import socket
 from subprocess import Popen
 
-def get_free_port():
-    """Finds a free UDP port."""
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
+class SharedBytes:
+    def __init__(self):
+        self.data = bytearray()  # Start with an empty bytearray
+        self.lock = threading.Lock()
+        self.closed = False
+        self.timeout_seconds = 10*60 # stops the threads after some time of innactivity
+        self.last_write = time.perf_counter()
 
+    def enqueue(self, new_data: bytes):
+        """Append new data to the shared bytearray."""
+        with self.lock:
+            self.data.extend(new_data)  # Add new data to the end
+            self.last_write = time.perf_counter()
+
+    def dequeue(self, size):
+        """Remove and return the specified number of bytes from the start."""
+        with self.lock:
+            if(time.perf_counter() - self.last_write > self.timeout_seconds):
+                self.closed = True
+            if len(self.data) == 0:
+                return self.data[:]
+            if size > len(self.data):
+                size = len(self.data)  # Adjust size if requested size exceeds available data
+            dequeued_data = self.data[:size]  # Get the requested bytes
+            self.data = self.data[size:]  # Remove the dequeued bytes
+            return dequeued_data
+        
 def save_to_wav(audio_bytes: bytes,
                 sample_rate=48000,
                 num_channels=2,
@@ -28,7 +48,6 @@ def save_to_wav(audio_bytes: bytes,
         wf.setframerate(sample_rate)
         wf.writeframes(audio_bytes)
     print(f"💾 Saved audio segment to {filename}")
-
 
 def write_sdp_file(payload_type,
                    codec_name,
@@ -77,7 +96,6 @@ def run_ffmpeg_input(sdp_path):
         stderr=subprocess.PIPE,
     )
 
-
 def run_ffmpeg_output(target_ip: str, target_port: InterruptedError,
                       payload_type: int, ssrc: int):
     cmd = [
@@ -102,7 +120,7 @@ def print_ffmpeg_logs(proc, label):
         if "error" in text.lower():
             print(f"{label}: {text}")
 
-def pump_audio(ff_in: Popen[bytes], ff_out: Popen[bytes], segment_size: int, sdp_path: str):
+def pump_audio(ff_in: Popen[bytes], ff_out: Popen[bytes], segment_size: int, sdp_path: str, output_queue: SharedBytes):
     buf = b""
     try:
         while True:
@@ -110,19 +128,19 @@ def pump_audio(ff_in: Popen[bytes], ff_out: Popen[bytes], segment_size: int, sdp
             if not chunk:
                 print('empty chunk, stopping')
                 break
+            
+            if(output_queue.closed):
+                print('output closed, stopping')
+                break
+            
             buf += chunk
             while len(buf) >= segment_size:
                 seg, buf = buf[:segment_size], buf[segment_size:]
-                #save_to_wav(seg)
+                save_to_wav(seg)
                 print(f"📦 Processed segment: {len(seg)} bytes")
-                try:
-                    ff_out.stdin.write(seg)
-                    ff_out.stdin.flush()
-                    print("🔊 Sent segment to Mediasoup")
-                except BrokenPipeError:
-                    print("⚠️ FFmpeg-OUT pipe closed")
-                    return
+                output_queue.enqueue(seg)
     finally:
+        output_queue.closed = True
         ff_in.stdout.close()
         ff_out.stdin.close()
         ff_in.wait()
@@ -131,6 +149,46 @@ def pump_audio(ff_in: Popen[bytes], ff_out: Popen[bytes], segment_size: int, sdp
             os.remove(sdp_path)
         except OSError:
             pass
+        
+def write_to_output(output_queue: SharedBytes, ff_out: Popen[bytes]):
+    segment_size = 4096
+    frame_interval = 0.02
+    next_time = time.perf_counter()
+    
+    try:
+        while not output_queue.closed:
+            def is_stdin_active(a):
+                return a.poll() is None and not a.stdin.closed
+
+            if is_stdin_active(ff_out):
+                print("stdin is active")
+            else:
+                print("stdin is not active")
+            # Send the frame if its available
+            seg = output_queue.dequeue(segment_size)
+            if(len(seg)>=0):
+                try:
+                    ff_out.stdin.write(seg)
+                    ff_out.stdin.flush()
+                except BrokenPipeError:
+                    print("⚠️ FFmpeg-OUT pipe closed")
+                    return
+
+            # Calculate when to send the next frame
+            next_time += frame_interval
+            sleep_time = next_time - time.perf_counter()
+            
+            # Only sleep if theres time left
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            # Otherwise, set the time to send the next frame to now
+            else:
+                next_time = time.perf_counter()
+                
+    except Exception as e:
+        print(f"Error in processing thread: {e}")
+    finally:
+        output_queue.closed = True
 
 sio = socketio.AsyncClient(
     reconnection=True,
@@ -169,21 +227,30 @@ async def on_translation_initiate(data):
     threading.Thread(
         target=print_ffmpeg_logs,
         args=(ff_in, "FFmpeg-IN"),
-        daemon=True,
+        daemon=True
     ).start()
+    
     threading.Thread(
         target=print_ffmpeg_logs,
         args=(ff_out, "FFmpeg-OUT"),
-        daemon=True,
+        daemon=True
     ).start()
 
     # 5s @48kHz stereo 16-bit = 48000 * 2 channels * 2 bytes * 5s
     segment_size = 48000 * 2 * 2 * 5
+    
+    output_queue = SharedBytes()
 
     threading.Thread(
         target=pump_audio,
-        args=(ff_in, ff_out, segment_size, sdp_path),
-        daemon=True,
+        args=(ff_in, ff_out, segment_size, sdp_path, output_queue),
+        daemon=True
+    ).start()
+    
+    threading.Thread(
+        target=write_to_output,
+        args=(output_queue, ff_out),
+        daemon=True
     ).start()
 
 
