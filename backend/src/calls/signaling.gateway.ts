@@ -9,15 +9,9 @@ import {
     Producer,
     RtpCapabilities,
     WebRtcTransport,
-    MediaKind,
-    PlainTransport,
+    MediaKind
 } from 'mediasoup/node/lib/types';
-import { spawn } from 'child_process';
-import { getPort } from 'src/lib/port';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
-import { msConfig } from './constants';
+import { getPort, getPortPair } from './port';
 
 const rooms = new Map<
     string,
@@ -27,8 +21,6 @@ const rooms = new Map<
 >();
 
 const userTransports = new Map<string, WebRtcTransport>();
-const plainTransports = new Map<string, PlainTransport>();
-
 
 let io: Server;
 
@@ -38,7 +30,7 @@ let io: Server;
     },
 })
 export class SignalingGateway implements OnGatewayInit {
-    constructor(private readonly mediasoupService: MediasoupService) { }
+    constructor(private readonly mediasoupService: MediasoupService) {}
 
     afterInit(server: Server) {
         io = server;
@@ -81,22 +73,16 @@ export class SignalingGateway implements OnGatewayInit {
                     rtpParameters,
                 });
 
+                let ffmpegConsumer: any = null;
+
                 if (kind === 'audio') {
+                    // Use a unique RTP port for each connection
+                    const [rtpPort, rtpRetPort] = getPortPair(); // Dynamically assign RTP port
+                    const rtcpPort = getPort(); // Dynamically assign RTCP port
 
-                    const rtpPort = 25000;
-                    const rtcpPort = getPort();
-
+                    // [Mediasoup -> FFmpeg]
                     const audioPlainTransport =
                         await this.mediasoupService.createPlainTransport("send");
-                    // const recvTransport = await this.mediasoupService.createPlainTransport("recv");
-                    // const ffmpegProducer = await recvTransport.produce({
-                    //     kind: "audio",
-                    //     rtpParameters: rtpParameters,
-                    // })
-
-                    // const listenRtpIp = recvTransport.tuple.localIp;
-                    // const listenRtpPort = recvTransport.tuple.localPort;
-                    // const listenRtcpPort = recvTransport.rtcpTuple?.localPort;
                     await audioPlainTransport.connect({
                         ip: '127.0.0.1',
                         port: rtpPort,
@@ -114,17 +100,42 @@ export class SignalingGateway implements OnGatewayInit {
                     const clockRate = codec.clockRate;
                     const channels = codec.channels || 2;
 
-
+                    // Emit translation initiation to the Python server
                     io.emit("translation:initiate", {
                         producerId: producer.id,
-                        rtpPort: rtpPort,
+                        rtpPort: rtpPort, // Send the unique RTP port to the server
                         rtcpPort: rtcpPort,
                         ip: audioPlainTransport.tuple.localIp,
                         codec: codecName,
                         clockRate,
                         channels,
                         payloadType,
-                        listenRtpId: 20000
+                    });
+
+                    // [FFmpeg -> Mediasoup]
+                    const recvTransport =
+                        await this.mediasoupService.createPlainTransport("recv");
+                    await recvTransport.connect({
+                        ip: '127.0.0.1',    // FFmpeg sends audio to this IP
+                        port: rtpRetPort,   // FFmpeg sends audio to this port
+                    });
+
+                    // Consume the audio data from FFmpeg
+                    ffmpegConsumer = await recvTransport.consume({
+                        producerId: producer.id, // The producer ID from Mediasoup
+                        rtpCapabilities: this.mediasoupService.getRtpCapabilities(),
+                        paused: false, // Start consuming immediately
+                    });
+
+                    console.log("FFmpeg Consumer created:", ffmpegConsumer);
+
+                    const stats = await ffmpegConsumer.getStats();
+                    console.log(stats, "FFMPEG CONSUMER STATS");
+
+                    io.to(roomCode).emit('new-producer', {
+                        producerId: ffmpegConsumer.id,
+                        socketId: socket.id,
+                        kind,
                     });
                 }
 
@@ -135,6 +146,13 @@ export class SignalingGateway implements OnGatewayInit {
                 }
 
                 rooms.get(roomCode)!.producers.set(socket.id, producer);
+
+                if (ffmpegConsumer != null) {
+                    rooms.get(roomCode)!.producers.set(
+                        socket.id + '-ffmpeg',
+                        ffmpegConsumer,
+                    );
+                }
 
                 socket.to(roomCode).emit('new-producer', {
                     producerId: producer.id,

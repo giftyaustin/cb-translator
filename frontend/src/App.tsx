@@ -105,7 +105,7 @@ function App() {
               key={`audio-${idx}`}
               autoPlay
               controls
-              muted
+              muted={false}
               ref={(audioElement) => {
                 if (audioElement && !audioElement.srcObject) {
                   audioElement.srcObject = remoteStream;
