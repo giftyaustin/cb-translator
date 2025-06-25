@@ -9,9 +9,12 @@ import {
     Producer,
     RtpCapabilities,
     WebRtcTransport,
-    MediaKind
+    MediaKind,
+    Consumer,
+    AppData
 } from 'mediasoup/node/lib/types';
 import { getPort, getPortPair } from './port';
+import { randomInt } from 'crypto';
 
 const rooms = new Map<
     string,
@@ -73,16 +76,15 @@ export class SignalingGateway implements OnGatewayInit {
                     rtpParameters,
                 });
 
-                let ffmpegConsumer: any = null;
+                let ffmpegProducer: Producer<AppData> | null = null;
 
                 if (kind === 'audio') {
                     // Use a unique RTP port for each connection
                     const [rtpPort, rtpRetPort] = getPortPair(); // Dynamically assign RTP port
-                    const rtcpPort = getPort(); // Dynamically assign RTCP port
+                    const [rtcpPort,rtcpRetPort] = getPortPair(); // Dynamically assign RTCP port
 
                     // [Mediasoup -> FFmpeg]
-                    const audioPlainTransport =
-                        await this.mediasoupService.createPlainTransport("send");
+                    const audioPlainTransport = await this.mediasoupService.createPlainTransport("send");
                     await audioPlainTransport.connect({
                         ip: '127.0.0.1',
                         port: rtpPort,
@@ -100,6 +102,7 @@ export class SignalingGateway implements OnGatewayInit {
                     const clockRate = codec.clockRate;
                     const channels = codec.channels || 2;
 
+                    const ssrc = randomInt(1, 0x7FFFFFFF);
                     // Emit translation initiation to the Python server
                     io.emit("translation:initiate", {
                         producerId: producer.id,
@@ -110,32 +113,31 @@ export class SignalingGateway implements OnGatewayInit {
                         clockRate,
                         channels,
                         payloadType,
+                        ssrc
                     });
 
                     // [FFmpeg -> Mediasoup]
-                    const recvTransport =
-                        await this.mediasoupService.createPlainTransport("recv");
+                    const recvTransport = await this.mediasoupService.createPlainTransport("recv");
                     await recvTransport.connect({
                         ip: '127.0.0.1',    // FFmpeg sends audio to this IP
                         port: rtpRetPort,   // FFmpeg sends audio to this port
+                        rtcpPort: rtcpRetPort,
                     });
 
                     // Consume the audio data from FFmpeg
-                    ffmpegConsumer = await recvTransport.consume({
-                        producerId: producer.id, // The producer ID from Mediasoup
-                        rtpCapabilities: this.mediasoupService.getRtpCapabilities(),
-                        paused: false, // Start consuming immediately
-                    });
-
-                    console.log("FFmpeg Consumer created:", ffmpegConsumer);
-
-                    const stats = await ffmpegConsumer.getStats();
-                    console.log(stats, "FFMPEG CONSUMER STATS");
-
-                    io.to(roomCode).emit('new-producer', {
-                        producerId: ffmpegConsumer.id,
-                        socketId: socket.id,
-                        kind,
+                    ffmpegProducer = await recvTransport.produce({
+                        kind: 'audio',
+                        rtpParameters: {
+                            codecs: [
+                                {
+                                    mimeType: 'audio/opus',
+                                    payloadType: 100,
+                                    clockRate: 48000,
+                                    channels: 2,
+                                },
+                            ],
+                            encodings: [{ ssrc }]
+                        },
                     });
                 }
 
@@ -145,20 +147,23 @@ export class SignalingGateway implements OnGatewayInit {
                     rooms.set(roomCode, { producers: new Map() });
                 }
 
+                if (kind === 'audio') {
+                    if (ffmpegProducer != null) {
+                        rooms.get(roomCode)!.producers.set(`${socket.id}-ffmpeg`, ffmpegProducer);
+                        socket.to(roomCode).emit('new-producer', {
+                            producerId: ffmpegProducer.id,
+                            socketId: socket.id,
+                            kind,
+                        });
+                    }
+                } else {
                 rooms.get(roomCode)!.producers.set(socket.id, producer);
-
-                if (ffmpegConsumer != null) {
-                    rooms.get(roomCode)!.producers.set(
-                        socket.id + '-ffmpeg',
-                        ffmpegConsumer,
-                    );
-                }
-
                 socket.to(roomCode).emit('new-producer', {
                     producerId: producer.id,
                     socketId: socket.id,
                     kind,
                 });
+                }
 
                 socket.emit('produced', { id: producer.id });
             });
