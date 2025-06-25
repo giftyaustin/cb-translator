@@ -75,7 +75,7 @@ export class MediasoupService {
     async createPlainTransport(type: 'send' | 'recv') {
         const plainTransport = await this.router.createPlainTransport({
             listenIp: { ip: '0.0.0.0', announcedIp: msConfig.announcedIp }, // for external access
-            rtcpMux: false, // separate RTP/RTCP
+            rtcpMux: true,
             comedia: type === 'send' ? false : true,  // allow remote to connect first
         });
 

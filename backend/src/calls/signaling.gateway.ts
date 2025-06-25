@@ -10,11 +10,10 @@ import {
     RtpCapabilities,
     WebRtcTransport,
     MediaKind,
-    Consumer,
     AppData
 } from 'mediasoup/node/lib/types';
-import { getPort, getPortPair } from './port';
 import { randomInt } from 'crypto';
+import { getPort } from './port';
 
 const rooms = new Map<
     string,
@@ -79,16 +78,12 @@ export class SignalingGateway implements OnGatewayInit {
                 let ffmpegProducer: Producer<AppData> | null = null;
 
                 if (kind === 'audio') {
-                    // Use a unique RTP port for each connection
-                    const [rtpPort, rtpRetPort] = getPortPair(); // Dynamically assign RTP port
-                    const [rtcpPort,rtcpRetPort] = getPortPair(); // Dynamically assign RTCP port
-
+                    const rtpPort = getPort();
                     // [Mediasoup -> FFmpeg]
                     const audioPlainTransport = await this.mediasoupService.createPlainTransport("send");
                     await audioPlainTransport.connect({
                         ip: '127.0.0.1',
                         port: rtpPort,
-                        rtcpPort,
                     });
 
                     const consumer = await audioPlainTransport.consume({
@@ -96,32 +91,30 @@ export class SignalingGateway implements OnGatewayInit {
                         rtpCapabilities: this.mediasoupService.getRtpCapabilities(),
                     });
 
+                    // [FFmpeg -> Mediasoup]
+                    const recvTransport = await this.mediasoupService.createPlainTransport("recv");
+                    await recvTransport.connect({
+                        ip: '127.0.0.1',    // FFmpeg sends audio to this IP
+                        port: recvTransport.tuple.localPort,   // FFmpeg sends audio to this port
+                    });
+
                     const codec = consumer.rtpParameters.codecs[0];
                     const payloadType = codec.payloadType;
                     const codecName = codec.mimeType.split('/')[1];
                     const clockRate = codec.clockRate;
                     const channels = codec.channels || 2;
-
                     const ssrc = randomInt(1, 0x7FFFFFFF);
                     // Emit translation initiation to the Python server
                     io.emit("translation:initiate", {
                         producerId: producer.id,
                         rtpPort: rtpPort, // Send the unique RTP port to the server
-                        rtcpPort: rtcpPort,
                         ip: audioPlainTransport.tuple.localIp,
                         codec: codecName,
                         clockRate,
                         channels,
                         payloadType,
-                        ssrc
-                    });
-
-                    // [FFmpeg -> Mediasoup]
-                    const recvTransport = await this.mediasoupService.createPlainTransport("recv");
-                    await recvTransport.connect({
-                        ip: '127.0.0.1',    // FFmpeg sends audio to this IP
-                        port: rtpRetPort,   // FFmpeg sends audio to this port
-                        rtcpPort: rtcpRetPort,
+                        ssrc,
+                        outputPort:recvTransport.tuple.localPort
                     });
 
                     // Consume the audio data from FFmpeg
@@ -131,9 +124,9 @@ export class SignalingGateway implements OnGatewayInit {
                             codecs: [
                                 {
                                     mimeType: 'audio/opus',
-                                    payloadType: 100,
-                                    clockRate: 48000,
-                                    channels: 2,
+                                    payloadType,
+                                    clockRate,
+                                    channels
                                 },
                             ],
                             encodings: [{ ssrc }]

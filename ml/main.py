@@ -132,14 +132,12 @@ def pump_audio(ff_in: Popen[bytes], ff_out: Popen[bytes], segment_size: int, sdp
         except OSError:
             pass
 
-
 sio = socketio.AsyncClient(
     reconnection=True,
     reconnection_attempts=5,
     reconnection_delay=1,
     reconnection_delay_max=5,
 )
-
 
 @sio.event
 async def connect():
@@ -165,7 +163,7 @@ async def on_translation_initiate(data):
     )
 
     ff_in = run_ffmpeg_input(sdp_path)
-    ff_out = run_ffmpeg_output("127.0.0.1", data["rtpPort"] + 1, data["payloadType"], data["ssrc"])
+    ff_out = run_ffmpeg_output("127.0.0.1", data["outputPort"], data["payloadType"], data["ssrc"])
 
     # Log FFmpeg stderr in the background
     threading.Thread(
