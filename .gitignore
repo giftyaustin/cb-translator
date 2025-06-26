@@ -17,7 +17,6 @@ pnpm-debug.log*
 Thumbs.db
 
 # Environment files
-.env
 .env.*.local
 
 # Coverage reports
@@ -34,7 +33,6 @@ out/
 .astro/
 
 # IDE configs
-.vscode/
 .idea/
 *.swp
 
@@ -54,3 +52,4 @@ eslintcache
 
 # Python cache
 ml/__pycache__/
+config.bat

@@ -8,6 +8,12 @@ import time
 import wave
 import uuid
 from subprocess import Popen
+import numpy as np
+from scipy import signal
+
+from seamlessm4t_translator_utils import translate_audio
+from streaming_translator_utils import SAMPLE_RATE, StatelessBytesTranslator
+translator1 = StatelessBytesTranslator(tgt_lang="hin")  # Hindi output
 
 class SharedBytes:
     def __init__(self):
@@ -120,7 +126,61 @@ def print_ffmpeg_logs(proc, label):
         if "error" in text.lower():
             print(f"{label}: {text}")
 
+# resamples and converts from mono to stereo
+def resample_audio(audio_bytes, original_sr=16000, target_sr=48000):
+    audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
+    new_length = int(len(audio_data) * target_sr / original_sr)
+    resampled = signal.resample(audio_data, new_length)
+    resampled = np.clip(resampled, -32768, 32767).astype(np.int16)
+    stereo_data = np.column_stack((resampled, resampled)).flatten()
+    return stereo_data.tobytes()
+
+# numpy array to bytes
+def tensor_to_bytes(translated_wav):
+    # 1. Assume this is your audio in float32 format (range -1.0 to 1.0)
+    audio_np = np.array(translated_wav, dtype=np.float32)
+    # 2. Clip to [-1, 1] just in case
+    audio_np = np.clip(audio_np, -1.0, 1.0)
+    # 3. Convert to int16 format (PCM 16-bit)
+    audio_int16 = (audio_np * 32767).astype(np.int16)
+    # 4. Convert to raw PCM bytes
+    translated_audio_bytes = audio_int16.tobytes()
+    return translated_audio_bytes
+
+def translate(audio: bytes, sample_rate: int):
+    #### Original translation code provided ####
+    which_translator = 2
+
+    if which_translator == 1:
+        #seamelessm4T
+        start_time = time.time()
+        translated_wav, translated_sr = translate_audio(audio, sample_width=2, frame_rate = sample_rate, channels = 2, tgt_lang = "hin")
+        end_time = time.time()
+        print(f"Inference time: {end_time-start_time: .4f} sec.")
+        print(translated_sr)
+
+    if which_translator == 2:
+        #seamless_streaming
+        sample_width = 2
+        channels = 2
+        #print(f"Sample width: {sample_width}, Frame rate: {frame_rate}, Channels: {channels}")
+        start_time = time.time()
+        translated_wav, text = translator1.translate_chunk(
+            audio,
+            input_sample_rate=sample_rate,
+            sample_width=sample_width,
+            channels=channels
+        )
+        end_time = time.time()
+        print(translated_wav, text)
+        print(f"Inference time: {end_time-start_time: .4f} sec.")
+        if text:
+            print("📝", text)
+    translated_audio_bytes = tensor_to_bytes(translated_wav)
+    return resample_audio(translated_audio_bytes, SAMPLE_RATE, sample_rate)
+
 def pump_audio(ff_in: Popen[bytes], ff_out: Popen[bytes], segment_size: int, sdp_path: str, output_queue: SharedBytes):
+    sample_rate = 48000
     buf = b""
     try:
         while True:
@@ -136,9 +196,10 @@ def pump_audio(ff_in: Popen[bytes], ff_out: Popen[bytes], segment_size: int, sdp
             buf += chunk
             while len(buf) >= segment_size:
                 seg, buf = buf[:segment_size], buf[segment_size:]
-                save_to_wav(seg)
+                save_to_wav(seg, sample_rate=sample_rate)
+                translated_bytes = translate(seg, sample_rate)
                 print(f"📦 Processed segment: {len(seg)} bytes")
-                output_queue.enqueue(seg)
+                output_queue.enqueue(translated_bytes)
     finally:
         output_queue.closed = True
         ff_in.stdout.close()
@@ -157,13 +218,6 @@ def write_to_output(output_queue: SharedBytes, ff_out: Popen[bytes]):
     
     try:
         while not output_queue.closed:
-            def is_stdin_active(a):
-                return a.poll() is None and not a.stdin.closed
-
-            if is_stdin_active(ff_out):
-                print("stdin is active")
-            else:
-                print("stdin is not active")
             # Send the frame if its available
             seg = output_queue.dequeue(segment_size)
             if(len(seg)>=0):
