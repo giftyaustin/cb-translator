@@ -169,17 +169,17 @@ async function negotiate() {
 }
 
 export async function sendAudioToPython(audioTrack: MediaStreamTrack) {
-  if (!pc) {
-    console.log('📡 Initializing peer connection with local audio');
-    await setupPeerConnection(audioTrack);
-  } else {
-    try {
-      pc.addTransceiver(audioTrack, { direction: 'sendrecv' });
-      await negotiate();
-    } catch (error) {
-      console.error('Error adding transceiver:', error);
-    }
-  }
+  // if (!pc) {
+  //   console.log('📡 Initializing peer connection with local audio');
+  //   await setupPeerConnection(audioTrack);
+  // } else {
+  //   try {
+  //     pc.addTransceiver(audioTrack, { direction: 'sendrecv' });
+  //     await negotiate();
+  //   } catch (error) {
+  //     console.error('Error adding transceiver:', error);
+  //   }
+  // }
 }
 
 export async function sendVideoToPython(videoTrack: MediaStreamTrack) {

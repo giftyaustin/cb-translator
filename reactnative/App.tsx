@@ -31,7 +31,7 @@ export default function App() {
 
   useEffect(() => {
     requestPermissions();
-    testServerConnectivity();
+    // testServerConnectivity();
   }, []);
 
   const testServerConnectivity = async () => {
