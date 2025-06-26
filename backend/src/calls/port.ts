@@ -1,4 +1,4 @@
-// adapted from src/lib/port.ts
+// code adapted from src/lib/port.ts creating a getPortPair fuinction as well
 
 const MIN_PORT = 20000;
 const MAX_PORT = 30000;
