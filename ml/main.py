@@ -15,33 +15,39 @@ from seamlessm4t_translator_utils import translate_audio
 from streaming_translator_utils import SAMPLE_RATE, StatelessBytesTranslator
 translator1 = StatelessBytesTranslator(tgt_lang="hin")  # Hindi output
 
-class SharedBytes:
-    def __init__(self):
-        self.data = bytearray()  # Start with an empty bytearray
-        self.lock = threading.Lock()
-        self.closed = False
-        self.timeout_seconds = 10*60 # stops the threads after some time of innactivity
-        self.last_write = time.perf_counter()
+SAMPLE_READ_SIZE = 4096 # minimum number of bytes read from the audio buffers/arrays
+OUTPUT_PERIOD = 0.02    # defines frequency at which output is written to the network
 
+# class resposible for handling the queue used to output audio to the socket
+# with special attention to thread safety
+class OutputAudioQueue:
+    def __init__(self):
+        self.data = bytearray()                 # Array that stores the audio queue
+        self.lock = threading.Lock()            # Lock used to controll access to the array between threads
+        self.closed = False                     # Variable used to communicate when the process must be stopped to the threads
+        self.timeout_seconds = 10*60            # Stops the threads after some time of innactivity (10 minutes here)
+        self.last_write = time.perf_counter()   # Variable that saves the last time the queue was appended to
+
+    # Appends new data to the queue.
     def enqueue(self, new_data: bytes):
-        """Append new data to the shared bytearray."""
         with self.lock:
-            self.data.extend(new_data)  # Add new data to the end
+            self.data.extend(new_data)
             self.last_write = time.perf_counter()
 
+    # Reads the specified number of bytes from the queue (removing them)
     def dequeue(self, size):
-        """Remove and return the specified number of bytes from the start."""
         with self.lock:
-            if(time.perf_counter() - self.last_write > self.timeout_seconds):
+            if(time.perf_counter() - self.last_write > self.timeout_seconds):   # Checks if timeout happened
                 self.closed = True
-            if len(self.data) == 0:
+            if len(self.data) == 0:             # If the data is empty, just return a copy of the entire queue (empty array)
                 return self.data[:]
-            if size > len(self.data):
-                size = len(self.data)  # Adjust size if requested size exceeds available data
-            dequeued_data = self.data[:size]  # Get the requested bytes
-            self.data = self.data[size:]  # Remove the dequeued bytes
+            if size > len(self.data):           # Adjusting size if requested size exceeds available data
+                size = len(self.data)  
+            dequeued_data = self.data[:size]    # Get the requested bytes
+            self.data = self.data[size:]        # Remove the bytes from que array
             return dequeued_data
         
+# Saves the bytes to a wav file in disk for debugging
 def save_to_wav(audio_bytes: bytes,
                 sample_rate=48000,
                 num_channels=2,
@@ -55,6 +61,7 @@ def save_to_wav(audio_bytes: bytes,
         wf.writeframes(audio_bytes)
     print(f"💾 Saved audio segment to {filename}")
 
+# Initializes the file used to read input from the network
 def write_sdp_file(payload_type,
                    codec_name,
                    clock_rate,
@@ -83,7 +90,7 @@ def write_sdp_file(payload_type,
         f.write(sdp)
     return path
 
-
+# creates pipe that reads the data from the sdp path provided
 def run_ffmpeg_input(sdp_path):
     return subprocess.Popen(
         [
@@ -102,6 +109,7 @@ def run_ffmpeg_input(sdp_path):
         stderr=subprocess.PIPE,
     )
 
+# creates pipe the writes to the destination rtp file
 def run_ffmpeg_output(target_ip: str, target_port: InterruptedError,
                       payload_type: int, ssrc: int):
     cmd = [
@@ -119,6 +127,7 @@ def run_ffmpeg_output(target_ip: str, target_port: InterruptedError,
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.PIPE)
 
+# Logs ffmpeg errors
 def print_ffmpeg_logs(proc, label):
     for line in iter(proc.stderr.readline, b""):
         text = line.decode().strip()
@@ -147,8 +156,9 @@ def tensor_to_bytes(translated_wav):
     translated_audio_bytes = audio_int16.tobytes()
     return translated_audio_bytes
 
+# Function that runs the translation steps on the audio bytes,
+# Returning the translated bytes in the provided sample rate and stereo
 def translate(audio: bytes, sample_rate: int):
-    #### Original translation code provided ####
     which_translator = 2
 
     if which_translator == 1:
@@ -163,7 +173,6 @@ def translate(audio: bytes, sample_rate: int):
         #seamless_streaming
         sample_width = 2
         channels = 2
-        #print(f"Sample width: {sample_width}, Frame rate: {frame_rate}, Channels: {channels}")
         start_time = time.time()
         translated_wav, text = translator1.translate_chunk(
             audio,
@@ -179,47 +188,58 @@ def translate(audio: bytes, sample_rate: int):
     translated_audio_bytes = tensor_to_bytes(translated_wav)
     return resample_audio(translated_audio_bytes, SAMPLE_RATE, sample_rate)
 
-def pump_audio(ff_in: Popen[bytes], ff_out: Popen[bytes], segment_size: int, sdp_path: str, output_queue: SharedBytes):
-    sample_rate = 48000
-    buf = b""
+# Runs a loop that reads data from the input pipe, processes it,
+# and adds the processed bytes to the output queue
+def pump_audio(
+        ff_in: Popen[bytes],
+        ff_out: Popen[bytes],
+        output_queue: OutputAudioQueue,
+        segment_size: int,
+        sample_rate: int,
+        sdp_path: str):
+    
+    buf = b"" #Inner buffer used to chunk the data into bigger chunks for processing
     try:
         while True:
-            chunk = ff_in.stdout.read(4096)
+            chunk = ff_in.stdout.read(SAMPLE_READ_SIZE)
+
+            # If returned chunk is null, there was an error in the input pipe
             if not chunk:
                 print('empty chunk, stopping')
                 break
             
+            # Checks if the output queue is opperational
             if(output_queue.closed):
                 print('output closed, stopping')
                 break
             
             buf += chunk
             while len(buf) >= segment_size:
-                seg, buf = buf[:segment_size], buf[segment_size:]
-                save_to_wav(seg, sample_rate=sample_rate)
-                translated_bytes = translate(seg, sample_rate)
+                seg, buf = buf[:segment_size], buf[segment_size:]   # reads from the start of the buffer and removes the data that was read
+                save_to_wav(seg, sample_rate=sample_rate)           # saves audio for debugging
+                translated_bytes = translate(seg, sample_rate)      # translates audio
                 print(f"📦 Processed segment: {len(seg)} bytes")
-                output_queue.enqueue(translated_bytes)
+                output_queue.enqueue(translated_bytes)              # writes to the output queue
     finally:
-        output_queue.closed = True
-        ff_in.stdout.close()
-        ff_out.stdin.close()
-        ff_in.wait()
+        output_queue.closed = True  # Makes sure the other threads are notified that the input was closed
+        ff_in.stdout.close()        # Closes input pipe
+        ff_out.stdin.close()        # Closes output pipe
+        ff_in.wait()                # Waits for operations to complete
         ff_out.wait()
         try:
-            os.remove(sdp_path)
+            os.remove(sdp_path)     # removes the sdp created for input
         except OSError:
             pass
-        
-def write_to_output(output_queue: SharedBytes, ff_out: Popen[bytes]):
-    segment_size = 4096
-    frame_interval = 0.02
+
+# Runs the loop that reads data from the output queue and
+# writes it to the output pipe (network) at the correct throughput
+def write_to_output(output_queue: OutputAudioQueue, ff_out: Popen[bytes]):
     next_time = time.perf_counter()
     
     try:
-        while not output_queue.closed:
-            # Send the frame if its available
-            seg = output_queue.dequeue(segment_size)
+        while not output_queue.closed:          # Runs the loop as long as the output queue is opperational
+            # Send the frame if there is any available data
+            seg = output_queue.dequeue(SAMPLE_READ_SIZE)
             if(len(seg)>=0):
                 try:
                     ff_out.stdin.write(seg)
@@ -229,7 +249,7 @@ def write_to_output(output_queue: SharedBytes, ff_out: Popen[bytes]):
                     return
 
             # Calculate when to send the next frame
-            next_time += frame_interval
+            next_time += OUTPUT_PERIOD
             sleep_time = next_time - time.perf_counter()
             
             # Only sleep if theres time left
@@ -242,8 +262,10 @@ def write_to_output(output_queue: SharedBytes, ff_out: Popen[bytes]):
     except Exception as e:
         print(f"Error in processing thread: {e}")
     finally:
-        output_queue.closed = True
+        output_queue.closed = True  # Makes sure the other threads are notified that the output was closed
 
+
+# Initializes socket client
 sio = socketio.AsyncClient(
     reconnection=True,
     reconnection_attempts=5,
@@ -255,52 +277,57 @@ sio = socketio.AsyncClient(
 async def connect():
     print("✅ Connected to server")
 
-
 @sio.event
 async def disconnect():
     print("❌ Disconnected from server")
 
-
 @sio.on("translation:initiate")
 async def on_translation_initiate(data):
     print("📥 Received translation initiation:", data)
+    sample_rate = data["clockRate"]
 
-    # Use the rtpPort provided by the client
+    # Sets up the read file from the rtp port provided by the client
     sdp_path = write_sdp_file(
         payload_type=data["payloadType"],
         codec_name=data["codec"],
-        clock_rate=data["clockRate"],
+        clock_rate=sample_rate,
         channels=data["channels"],
-        rtp_port=data["rtpPort"],  # Trusting the client's provided port (and the port next to it) is unique
+        rtp_port=data["rtpPort"],   # Trusting the client's provided port is unique. This is handled by the typescript code
     )
 
-    ff_in = run_ffmpeg_input(sdp_path)
-    ff_out = run_ffmpeg_output("127.0.0.1", data["outputPort"], data["payloadType"], data["ssrc"])
+    ff_in = run_ffmpeg_input(sdp_path)  # Sets up input pipe
+    ff_out = run_ffmpeg_output(         # Sets up output pipe
+        "127.0.0.1",
+        data["outputPort"],         # Trusting the client's provided output port is unique. This is handled by the typescript code
+        data["payloadType"],
+        data["ssrc"])
 
-    # Log FFmpeg stderr in the background
+    # Creating threads that Log errors encountered by FFmpeg
     threading.Thread(
         target=print_ffmpeg_logs,
         args=(ff_in, "FFmpeg-IN"),
         daemon=True
     ).start()
-    
     threading.Thread(
         target=print_ffmpeg_logs,
         args=(ff_out, "FFmpeg-OUT"),
         daemon=True
     ).start()
 
-    # 5s @48kHz stereo 16-bit = 48000 * 2 channels * 2 bytes * 5s
-    segment_size = 48000 * 2 * 2 * 5
+    # 5s @48kHz stereo 16-bit = sample_rate * 2 channels * 2 bytes * 5s
+    segment_size = sample_rate * 2 * 2 * 5
     
-    output_queue = SharedBytes()
+    # Initializes output audio queue
+    output_queue = OutputAudioQueue()
 
+    # Creating thread that processes audio
     threading.Thread(
         target=pump_audio,
-        args=(ff_in, ff_out, segment_size, sdp_path, output_queue),
+        args=(ff_in, ff_out, output_queue, segment_size, sample_rate, sdp_path),
         daemon=True
     ).start()
     
+    # Creating thread that outputs audio
     threading.Thread(
         target=write_to_output,
         args=(output_queue, ff_out),
