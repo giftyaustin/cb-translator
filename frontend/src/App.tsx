@@ -30,7 +30,7 @@ function App() {
       await startStreaming(mediaStream, roomCode);
       setJoined(true);
     } catch (err: any) {
-      console.error('Join failed:', err);
+      console.trace('Join failed:', err);
       setError(err.message);
     }
   };

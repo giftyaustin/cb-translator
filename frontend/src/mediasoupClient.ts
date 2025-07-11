@@ -14,6 +14,8 @@ export async function startMediasoup(
     socket.emit('get-rtp-capabilities');
 
     socket.once('rtp-capabilities', async (rtpCapabilities) => {
+      console.log(rtpCapabilities);
+      
       device = new mediasoupClient.Device();
       await device.load({ routerRtpCapabilities: rtpCapabilities });
 

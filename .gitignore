@@ -53,4 +53,8 @@ out/
 eslintcache
 
 # Python cache
-ml/__pycache__/
+ml/__pycache__
+ml/cb-venv/
+ml/xtts-venv
+ml/recordings
+ml/TTS

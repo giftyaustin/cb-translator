@@ -80,7 +80,7 @@ def translate_audio(raw_bytes: bytes, sample_width: int, frame_rate: int, channe
     # --- 3. Translate the Audio ---
     print(f"Translating to {tgt_lang}...")
     try:
-        text_output, speech_output = translator.predict(
+        translated_text, speech_output = translator.predict(
             input=waveform,
             task_str="s2st",  # Speech-to-Speech Translation
             tgt_lang=tgt_lang,
@@ -88,9 +88,9 @@ def translate_audio(raw_bytes: bytes, sample_width: int, frame_rate: int, channe
         translated_wav = speech_output.audio_wavs[0][0].to(torch.float32).cpu()
         translated_sr = speech_output.sample_rate
 
-        print(f"Translated text (this is a transcription of the input tone): {text_output[0]}")
+        print(f"Translated text (this is a transcription of the input tone): {translated_text[0]}")
         translated_wav = translated_wav.squeeze().cpu().numpy()
-        return translated_wav, translated_sr
+        return translated_wav, translated_sr, translated_text[0] 
 
     except Exception as e:
         print(f"An error occurred during translation: {e}")
