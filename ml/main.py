@@ -22,16 +22,7 @@ import numpy as np
 import cv2
 from io import BytesIO
 
-def video_bytes_to_frames(byte_data):
-    # Use a memory buffer
-    container = av.open(BytesIO(byte_data), format='mp4')  # or 'webm', 'h264', etc.
 
-    frames = []
-    for frame in container.decode(video=0):
-        img = frame.to_ndarray(format='bgr24')  # Convert to OpenCV format
-        frames.append(img)
-
-    return frames
 
 ##########################################
 
@@ -39,9 +30,6 @@ def video_bytes_to_frames(byte_data):
 seamlessm4t = 0
 seamless_streaming = 1
 
-# Import your translators
-if seamlessm4t == 1:
-    from seamlessm4t_translator_utils import translate_audio
 
 #from streaming_translator_utils import SAMPLE_RATE, StatelessBytesTranslator
 #translator1 = StatelessBytesTranslator(tgt_lang="hin")  # Hindi output
@@ -57,185 +45,23 @@ def request_voice_clone(audio):
 
 
 if seamless_streaming ==1:#%%
-    import io
-    import queue
-    import sounddevice as sd
-    import numpy as np
-    import soundfile
-    from pydub import AudioSegment
-    from pydub.playback import play
-
-    from simuleval.data.segments import SpeechSegment, EmptySegment, TextSegment
-    from simuleval.agents.pipeline import TreeAgentPipeline
-    from simuleval.agents.states import AgentStates
-
-    from seamless_communication.streaming.agents.seamless_streaming_s2st import (
-        SeamlessStreamingS2STJointVADAgent,
+    
+    from seamless_streaming_utils import (
+        OutputSegments,
+        reset_states,
+        get_audio_bytes,
+        play_audio,
+        play_audio1,
+        get_audiosegment,
+        build_streaming_system,
+        bytes_to_float32_mono_array,
+        stream_translate_from_bytes,
     )
-    from simuleval.utils.arguments import cli_argument_list
-    from simuleval import options
-    import torchaudio
-    import torch
-    import time
 
-    SAMPLE_RATE = 16000
-    CHUNK_SIZE = 16000  # 1-second chunks
+    from seamless_communication.streaming.agents.seamless_streaming_s2st import SeamlessStreamingS2STJointVADAgent
+    from simuleval.data.segments import SpeechSegment, EmptySegment, TextSegment
 
-    class OutputSegments:
-        def __init__(self, segments):
-            if isinstance(segments, (SpeechSegment, TextSegment, EmptySegment)):
-                segments = [segments]
-            self.segments = [s for s in segments]
-
-        @property
-        def is_empty(self):
-            return all(getattr(segment, "is_empty", False) for segment in self.segments)
-
-        @property
-        def finished(self):
-            return all(getattr(segment, "finished", False) for segment in self.segments)
-
-    def reset_states(system, states):
-        if isinstance(system, TreeAgentPipeline):
-            states_iter = states.values()
-        else:
-            states_iter = states
-        for state in states_iter:
-            state.reset()
-
-
-
-    def get_audio_bytes(samples, sr: int, target_sr: int = 48000, stereo: bool = False) -> bytes:
-        import torchaudio
-        import io
-
-        # Convert to tensor if input is a list
-        if isinstance(samples, list):
-            samples = torch.tensor(samples, dtype=torch.float32)
-        elif isinstance(samples, np.ndarray):
-            samples = torch.from_numpy(samples).float()
-
-        if sr is None or sr <= 0 or target_sr is None or target_sr <= 0:
-            raise ValueError(f"Invalid sample rate(s): sr={sr}, target_sr={target_sr}")
-
-        # Convert to stereo if requested
-        if stereo and samples.dim() == 1:
-            samples = samples.unsqueeze(0).repeat(2, 1)  # [2, N]
-        elif samples.dim() == 1:
-            samples = samples.unsqueeze(0)  # [1, N]
-
-        # Resample if needed
-        if sr != target_sr:
-            samples = torchaudio.functional.resample(samples, orig_freq=sr, new_freq=target_sr)
-
-        # Save to WAV bytes
-        buffer = io.BytesIO()
-        torchaudio.save(buffer, samples.cpu(), sample_rate=target_sr, format="wav")
-        buffer.seek(0)
-        return buffer.read()
-
-
-
-
-    def play_audio1(audio_bytes):
-        # Load WAV from bytes
-        audio_tensor, sr = torchaudio.load(io.BytesIO(audio_bytes))
-        print(sr)
-
-        # Convert to numpy (shape: [channels, time])
-        audio_np = audio_tensor.cpu().numpy()
-
-        # If mono: [1, N] → [N], else: keep stereo shape [2, N]
-        if audio_np.shape[0] == 1:
-            audio_np = audio_np.squeeze(0).T  # (N,)
-        else:
-            audio_np = audio_np.T  # Convert to shape (N, 2) for stereo
-
-        # Play
-        sd.play(audio_np, samplerate=sr)
-        sd.wait()
-
-    def play_audio(audio_bytes, sample_rate=48000, num_channels=2, sample_width=2):
-        # Determine correct dtype from sample_width
-        dtype_map = {1: np.uint8, 2: np.int16, 4: np.int32}
-        dtype = dtype_map[sample_width]
-
-        # Convert bytes to numpy array
-        audio_np = np.frombuffer(audio_bytes, dtype=dtype)
-
-        # Normalize to float32 range [-1, 1]
-        if dtype == np.uint8:
-            audio_np = (audio_np.astype(np.float32) - 128) / 128
-        elif dtype == np.int16:
-            audio_np = audio_np.astype(np.float32) / 32768
-        elif dtype == np.int32:
-            audio_np = audio_np.astype(np.float32) / 2147483648
-
-        # Reshape if stereo
-        if num_channels > 1:
-            audio_np = audio_np.reshape(-1, num_channels)
-
-        # Play
-        sd.play(audio_np, samplerate=sample_rate)
-        sd.wait()
-
-
-    def get_audiosegment(samples, sr):
-        b = io.BytesIO()
-        soundfile.write(b, samples, samplerate=sr, format="wav")
-        b.seek(0)
-        return AudioSegment.from_file(b)
-
-    def build_streaming_system(model_configs, agent_class):
-        parser = options.general_parser()
-        parser.add_argument("-f", "--f", help="dummy arg for IPython", default="1")
-
-        agent_class.add_args(parser)
-        args, _ = parser.parse_known_args(cli_argument_list(model_configs))
-        system = agent_class.from_args(args)
-        return system
-
-
-    def bytes_to_float32_mono_array(audio_bytes: bytes, input_sr=48000, target_sr=16000) -> np.ndarray:
-        # 1. Decode stereo int16 bytes to numpy array
-        audio_np = np.frombuffer(audio_bytes, dtype=np.int16)
-        audio_np = audio_np.reshape(-1, 2)  # 2 channels
-
-        # 2. Convert to mono by averaging channels
-        mono_np = audio_np.mean(axis=1)
-
-        # 3. Convert to torch tensor and float32 [-1.0, 1.0]
-        waveform = torch.tensor(mono_np, dtype=torch.float32) / 32768.0
-        waveform = waveform.unsqueeze(0)  # (1, N)
-
-        # 4. Resample to 16kHz
-        resampled = torchaudio.functional.resample(waveform, orig_freq=input_sr, new_freq=target_sr)
-
-        return resampled.squeeze(0).numpy()  # Return as 1D float32 array
-
-    def stream_translate_from_bytes(audio_bytes: bytes, system, system_states, input_sr=48000, target_sr=16000, tgt_lang="hin"):
-        # Convert bytes → float32 mono array at 16kHz
-        float_audio = bytes_to_float32_mono_array(audio_bytes, input_sr=input_sr, target_sr=target_sr)
-
-        # Feed to SpeechSegment
-        input_segment = SpeechSegment(content=float_audio, sample_rate=target_sr)
-        input_segment.tgt_lang = tgt_lang
-
-        output_segments = OutputSegments(system.pushpop(input_segment, system_states))
-
-        translated_audio = b""
-        translated_text = ""
-
-        for seg in output_segments.segments:
-            if isinstance(seg, SpeechSegment):
-                translated_audio += get_audio_bytes(seg.content, seg.sample_rate)
-            elif isinstance(seg, TextSegment):
-                translated_text += seg.content + " "
-
-        return translated_audio, translated_text.strip(), output_segments.finished
-
-
-
+    
     agent_class = SeamlessStreamingS2STJointVADAgent
     tgt_lang = "hin"
 
@@ -260,6 +86,49 @@ if seamless_streaming ==1:#%%
     # system_states = system.build_states()
 
     #stream_translate(system, tgt_lang)
+def process_translation_chunk(
+    audio_chunk: bytes,
+    target_lang: str,
+    system,
+    system_states,
+    output_queue,
+    voice_clone_enabled: bool = False,
+    request_voice_clone=None,
+    tensor_to_bytes=None,
+    resample_audio=None,
+    save_to_wav=None,
+    input_sr: int = 48000,
+    target_sr: int = 16000,
+):
+    float_audio = bytes_to_float32_mono_array(audio_chunk, input_sr=input_sr, target_sr=target_sr)
+    input_segment = SpeechSegment(content=float_audio, sample_rate=target_sr)
+    input_segment.tgt_lang = target_lang
+
+    start_time = time.time()
+    output_segments = OutputSegments(system.pushpop(input_segment, system_states))
+    inference_time = time.time() - start_time
+
+    for seg in output_segments.segments:
+        if isinstance(seg, SpeechSegment) and seg.sample_rate > 1:
+            if voice_clone_enabled:
+                assert request_voice_clone and tensor_to_bytes and resample_audio, "Voice cloning functions must be provided."
+                clone_tensor = request_voice_clone(seg.content)
+                cloned_audio_bytes = tensor_to_bytes(clone_tensor)
+                translated_audio_bytes = resample_audio(cloned_audio_bytes, 24000, 48000)
+                if save_to_wav:
+                    save_to_wav(translated_audio_bytes)
+            else:
+                translated_audio_bytes = get_audio_bytes(seg.content, seg.sample_rate)
+            output_queue.enqueue(translated_audio_bytes)
+
+        elif isinstance(seg, TextSegment):
+            print(f"📝 Translated text: {seg.content}")
+
+    if output_segments.finished:
+        time.sleep(0.3)
+        print("⏹️ Utterance ended. Resetting...")
+        reset_states(system, system_states)
+
 #%%
 
 SAMPLE_READ_SIZE = 4096  # minimum number of bytes read from the audio buffers/arrays
@@ -387,70 +256,6 @@ def tensor_to_bytes(translated_wav):
     audio_int16 = (audio_np * 32767).astype(np.int16)
     return audio_int16.tobytes()
 
-# # Function that runs the translation steps on the audio bytes
-# def translate(audio: bytes, sample_rate: int):
-#     #### Original translation code provided ####
-#     which_translator = 1
-
-#     if which_translator == 1:
-#         #seamelessm4T
-#         start_time = time.time()
-#         translated_wav, translated_sr, translated_text= translate_audio(audio, sample_width=2, frame_rate = sample_rate, channels = 2, tgt_lang = "hin")
-#         end_time = time.time()
-#         print(f"Inference time: {end_time-start_time: .4f} sec.")
-#         print(translated_text)
-
-#     if which_translator == 2:
-#         #seamless_streaming
-#         sample_width = 2
-#         channels = 2
-#         #print(f"Sample width: {sample_width}, Frame rate: {frame_rate}, Channels: {channels}")
-#         start_time = time.time()
-#         translated_wav, translated_text = translator1.translate_chunk(
-#             audio,
-#             input_sample_rate=sample_rate,
-#             sample_width=sample_width,
-#             channels=channels
-#         )
-#         end_time = time.time()
-#         #print(translated_wav, text)
-#         print(f"Inference time: {end_time-start_time: .4f} sec.")
-#         if translated_text:
-#             print("📝", translated_text)
-#     translated_audio_bytes = tensor_to_bytes(translated_wav)
-#     return resample_audio(translated_audio_bytes, SAMPLE_RATE, sample_rate)
-
-def translate(audio: bytes, sample_rate: int):
-    #### Original translation code provided ####
-    which_translator = 1
-
-    if which_translator == 1:
-        #seamelessm4T
-        start_time = time.time()
-        translated_wav, translated_sr, translated_text= translate_audio(audio, sample_width=2, frame_rate = sample_rate, channels = 2, tgt_lang = "hin")
-        end_time = time.time()
-        print(f"Inference time: {end_time-start_time: .4f} sec.")
-        print(translated_text)
-
-    # if which_translator == 2:
-    #     #seamless_streaming
-    #     sample_width = 2
-    #     channels = 2
-    #     #print(f"Sample width: {sample_width}, Frame rate: {frame_rate}, Channels: {channels}")
-    #     start_time = time.time()
-    #     translated_wav, translated_text = translator1.translate_chunk(
-    #         audio,
-    #         input_sample_rate=sample_rate,
-    #         sample_width=sample_width,
-    #         channels=channels
-    #     )
-    #     end_time = time.time()
-    #     #print(translated_wav, text)
-    #     print(f"Inference time: {end_time-start_time: .4f} sec.")
-    #     if translated_text:
-    #         print("📝", translated_text)
-    #translated_audio_bytes = tensor_to_bytes(translated_wav)
-    return translated_wav, translated_sr, translated_text
 
 # Function that reads from the input pipe, processes audio, and enqueues to output
 def pump_audio(ff_in: Popen, ff_out: Popen, output_queue: OutputAudioQueue, segment_size: int, sample_rate: int, sdp_path: str, system, system_states, target_lang):
@@ -469,70 +274,21 @@ def pump_audio(ff_in: Popen, ff_out: Popen, output_queue: OutputAudioQueue, segm
                 seg, buf = buf[:segment_size], buf[segment_size:]
                 ##############################################################
                 if seamless_streaming == 1:
-                    float_audio = bytes_to_float32_mono_array(seg, input_sr=48000, target_sr=16000)
-
-                    # ⏱️ Inference time measurement
-                    #clean_chunk = nr.reduce_noise(y=float_audio, sr=SAMPLE_RATE) 
-                    input_segment = SpeechSegment(content=float_audio, sample_rate=16000)
-                    input_segment.tgt_lang = target_lang
-
-                    # ⏱️ Start timer before inference
-                    start_time = time.time()
-
-                    # Translation pipeline (likely includes STT → Translate → TTS)
-                    output_segments = OutputSegments(system.pushpop(input_segment, system_states))
-
-                    # ⏱️ End timer after inference
-                    inference_time = time.time() - start_time
-                    # print(f"🕒 Inference time: {inference_time:.3f} sec")
-                    # output_queue.enqueue(get_audio_bytes(output_segments.segments))
-                    for seg in output_segments.segments:
-                        if isinstance(seg, SpeechSegment):
-                            if seg.sample_rate > 1:
-                                voice_clone = 0
-                                #for cloning
-                                if voice_clone == 1:
-                                    clone_tensor = request_voice_clone(seg.content)
-                                    #print(clone_tensor.shape)
-                                    #torchaudio.save(f"received_clone_{time.time()}.wav", clone_tensor, sample_rate=24000)
-                                    cloned_audio_bytes = tensor_to_bytes(clone_tensor)
-                                    translated_audio_bytes = resample_audio(cloned_audio_bytes, 24000, 48000)
-                                    save_to_wav(translated_audio_bytes)
-                                    #play_audio(translated_audio_bytes)
-                                else:
-                                    translated_audio_bytes = get_audio_bytes(seg.content, seg.sample_rate)
-                                    #play_audio1(translated_audio_bytes)
-                                output_queue.enqueue(translated_audio_bytes)
-
-
-                        elif isinstance(seg, TextSegment):
-                            print(f"📝 Translated text: {seg.content}")
-
-                    if output_segments.finished:
-                        time.sleep(0.3)
-                        print("⏹️ Utterance ended. Resetting...")
-                        reset_states(system, system_states)
-
-                if seamlessm4t == 1:
-                    translated_wav, translated_sr, translated_text = translate(seg, sample_rate)
-                    #print(translated_wav.shape)
-                    voice_clone = 0
-                    #for cloning
-                    if voice_clone == 1:
-                        print(str(translated_text))
-                        clone_tensor = request_voice_clone(str(translated_text), language="hi")
-                        #print(clone_tensor.squeeze().cpu().numpy().shape)
-                        #torchaudio.save(f"received_clone_{time.time()}.wav", clone_tensor, sample_rate=24000)
-                        cloned_audio_bytes = tensor_to_bytes(clone_tensor.squeeze().cpu().numpy())
-                        translated_bytes = resample_audio(cloned_audio_bytes, 24000, sample_rate)
-                    else: 
-                        translated_audio_bytes = tensor_to_bytes(translated_wav)
-                        translated_bytes = resample_audio(translated_audio_bytes, translated_sr, sample_rate)
-
-                    save_to_wav(translated_bytes)
-                    print(f"📦 Processed segment: {len(seg)} bytes")
-                    output_queue.enqueue(translated_bytes)
-                    ################################################
+                    process_translation_chunk(
+                        seg,
+                        target_lang=target_lang,
+                        system=system,
+                        system_states=system_states,
+                        output_queue=output_queue,
+                        voice_clone_enabled=False,
+                        request_voice_clone=request_voice_clone,
+                        tensor_to_bytes=tensor_to_bytes,
+                        resample_audio=resample_audio,
+                        save_to_wav=save_to_wav
+                    )
+                    #################################################
+                else: 
+                    output_queue.enqueue(seg)
                
     finally:
         output_queue.closed = True
@@ -671,57 +427,84 @@ def write_video_sdp_file(payload_type, codec_name, clock_rate, rtp_port):
     return path
  
  
-def run_ffmpeg_video_pipe(sdp_path):
+def run_ffmpeg_video_pipe(sdp_path, width=640, height=480):
     cmd = [
         "ffmpeg",
         "-loglevel", "info",
         "-protocol_whitelist", "file,udp,rtp",
         "-f", "sdp",
         "-i", sdp_path,
-        "-c:v", "copy",
-        "-f", "mpegts",
+        "-an",  # no audio
+        "-f", "rawvideo",
+        "-pix_fmt", "bgr24",
+        "-s", f"{width}x{height}",
         "pipe:1"
     ]
-    return subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=10**8
-    )
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=10**8)
 
- 
-def capture_video_chunks_forever(proc: Popen, chunk_duration):
-    buf = bytearray()
-    start_time = time.perf_counter()
+
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 480
+FRAME_SIZE = FRAME_WIDTH * FRAME_HEIGHT * 3  # for bgr24
+FPS = 250
+NUM_OF_SECONDS = 5
+
+
+
+import queue
+
+def save_video_from_frames(frames, output_path, fps=250, frame_size=None):
+    if not frames:
+        raise ValueError("No frames to write.")
+
+    # Infer frame size from first frame if not provided
+    if frame_size is None:
+        height, width, _ = frames[0].shape
+        frame_size = (width, height)
+
+    # Define the codec and create VideoWriter object
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    out = cv2.VideoWriter(output_path, fourcc, fps, frame_size)
+
+    for frame in frames:
+        # Ensure frame matches target size
+        resized = cv2.resize(frame, frame_size)
+        out.write(resized)
+
+    out.release()
+    print(f"✅ Video saved to {output_path}")
+
+def save_video_async(frames, output_path, fps=30, frame_size=None):
+    thread = threading.Thread(target=save_video_from_frames, args=(frames.copy(), output_path, fps, frame_size))
+    thread.daemon = True
+    thread.start()
+
+def capture_frames_forever(proc: Popen, frame_width: int, frame_height: int, fps: int, num_of_seconds: int = 5):
+    frame_size = frame_width * frame_height * 3  # BGR24
+    max_frames = fps * num_of_seconds
+    frame_buffer = []
+    frame_count = 0
+    start_time = time.time()
     try:
         while True:
-            chunk = proc.stdout.read(4096)
-            if not chunk:
-                print("📤 FFmpeg pipe ended, restarting capture loop")
+            raw_frame = proc.stdout.read(frame_size)
+            if not raw_frame:
+                print("📤 FFmpeg pipe ended")
                 break
-            buf.extend(chunk)
-            elapsed = time.perf_counter() - start_time
-            if elapsed >= chunk_duration:
-                print(type(buf))
 
-                # # Example usage
-                #video_bytes = bytearray(buf)  # your byte stream
-                #frames = video_bytes_to_frames(video_bytes)
-                #print(frames[0].shape)
+            frame = np.frombuffer(raw_frame, np.uint8).reshape((frame_height, frame_width, 3))
+            frame_buffer.append(frame)
+            #print(len(frame_buffer))
+            if len(frame_buffer) == max_frames:
+                print(f"time: {time.time()-start_time}")
+                #save_video_async(frame_buffer, f"out_{time.time()}.avi", fps=int(fps), frame_size=None)                
+                print(f"📦 Collected {len(frame_buffer)} frames ({num_of_seconds}s chunk)")
 
-                # # Display or save a frame
-                #cv2.imshow("Frame 0", frames[0])
-                #cv2.waitKey(0)
-                #cv2.destroyAllWindows()
+                # Clear buffer for next chunk
+                frame_buffer.clear()
 
-
-                print(f"📦 Captured 5-second video chunk: {len(buf)} bytes")
-                # buf for video
-                buf.clear()
-                start_time = time.perf_counter()
- 
     except Exception as e:
-        print(f"⚠️ Error in capture_video_chunks_forever: {e}")
+        print(f"⚠️ Error in capture_frames_forever: {e}")
     finally:
         try:
             proc.stdout.close()
@@ -730,8 +513,9 @@ def capture_video_chunks_forever(proc: Popen, chunk_duration):
             proc.wait(timeout=5)
         except:
             pass
-        print("✅ Video chunk capture stopped cleanly")
- 
+        cv2.destroyAllWindows()
+        print("✅ Frame capture stopped")
+
  
  
 class VideoCaptureRequest(BaseModel):
@@ -743,35 +527,30 @@ class VideoCaptureRequest(BaseModel):
 @app.post("/video/initiate")
 async def initiate_video_capture(data: VideoCaptureRequest):
     print("📥 Received video capture initiation:", data.dict())
- 
-    # Write SDP file
+
     sdp_path = write_video_sdp_file(
         payload_type=data.payloadType,
         codec_name=data.codec,
         clock_rate=data.clockRate,
         rtp_port=data.rtpPort
     )
- 
-    # Start FFmpeg process
-    ffmpeg_proc = run_ffmpeg_video_pipe(sdp_path)
- 
-    # FFmpeg logs thread
+
+    ffmpeg_proc = run_ffmpeg_video_pipe(sdp_path, width=FRAME_WIDTH, height=FRAME_HEIGHT)
+
     threading.Thread(
         target=print_ffmpeg_logs, args=(ffmpeg_proc, "FFmpeg-VIDEO"), daemon=True
     ).start()
- 
-    # Video capture chunk loop thread
-    capture_thread = threading.Thread(
-        target=capture_video_chunks_forever,
-        args=(ffmpeg_proc, 5),
+
+    threading.Thread(
+        target=capture_frames_forever,
+        args=(ffmpeg_proc, FRAME_WIDTH, FRAME_HEIGHT, FPS, NUM_OF_SECONDS),
         daemon=True
-    )
-    capture_thread.start()
- 
-    return {"status": "Video capture started, chunking 1-second slices infinitely."}
- 
+    ).start()
+
+    return {"status": "Frame-based video capture started."}
 
 
+# 640 x 480
 
 
 if __name__ == "__main__":

@@ -17,6 +17,8 @@ function App() {
         video: true,
         audio: true
       });
+     console.log( mediaStream.getVideoTracks()[0].getSettings());
+     
       setStream(mediaStream);
 
       await startMediasoup(roomCode, (remoteStream, kind) => {
