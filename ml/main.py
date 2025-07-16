@@ -357,7 +357,7 @@ def pump_audio(
                     )
                     #################################################
                 else:
-                    video_frames = video_frames_storage.get(session_id, None)
+                    video_frames = video_frames_storage.pop(session_id, None)
                     print(
                         f"🟩 Processing video and audio segment for session {session_id}... {chunk_count}"
                         + (
@@ -366,6 +366,8 @@ def pump_audio(
                             else ", no video frames found."
                         )
                     )
+                    
+                    
                     output_queue.enqueue(seg)
 
     finally:
@@ -643,7 +645,7 @@ def store_frames(
         while True:
             count += 1
             raw_frame = proc.stdout.read(frame_size)
-            print(f"📥 Received {len(raw_frame)} bytes for session {session_id} {count}")
+            # print(f"📥 Received {len(raw_frame)} bytes for session {session_id} {count}")
             if not raw_frame:
                 print("📤 FFmpeg pipe ended")
                 break
