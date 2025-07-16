@@ -17,8 +17,11 @@ function App() {
         video: true,
         audio: true
       });
-     console.log( mediaStream.getVideoTracks()[0].getSettings());
-     
+      console.log(mediaStream.getVideoTracks()[0].getSettings());
+      const height = mediaStream.getVideoTracks()[0].getSettings().height;
+      const width = mediaStream.getVideoTracks()[0].getSettings().width;
+      localStorage.setItem('height', height!.toString());
+      localStorage.setItem('width', width!.toString());
       setStream(mediaStream);
 
       await startMediasoup(roomCode, (remoteStream, kind) => {
@@ -29,7 +32,7 @@ function App() {
         }
       });
 
-      await startStreaming(mediaStream, roomCode);
+      await startStreaming(mediaStream);
       setJoined(true);
     } catch (err: any) {
       console.trace('Join failed:', err);

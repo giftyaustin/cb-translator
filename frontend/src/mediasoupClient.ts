@@ -34,7 +34,10 @@ export async function startMediasoup(
         });
 
         sendTransport.on('produce', (params, callback) => {
-          socket.emit('produce', { ...params, roomCode });
+          const userId = localStorage.getItem('userId') || '';
+          const height: number = Number(localStorage.getItem('height') || '480');
+          const width: number = Number(localStorage.getItem('width') || '640');
+          socket.emit('produce', { ...params, roomCode, userId, height, width });
           socket.once('produced', ({ id }) => {
             callback({ id });
           });

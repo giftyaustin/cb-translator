@@ -5,7 +5,7 @@ const PORT = 25001;
 
 server.on("message", (msg, rinfo) => {
   console.log(
-    `📦 Got message from ${rinfo.address}:${rinfo.port} - Size: ${msg.length} bytes`
+    `📦 Got message from ${rinfo.address}:${rinfo.port} - Size: ${msg.length} bytes ${msg}`
   );
 });
 
