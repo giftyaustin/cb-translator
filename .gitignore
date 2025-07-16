@@ -44,6 +44,9 @@ out/
 *.gz
 *.zip
 *.wav
+*.mp4
+*.pt
+*.pth
 
 # TypeScript
 *.tsbuildinfo
@@ -58,3 +61,5 @@ ml/cb-venv/
 ml/xtts-venv
 ml/recordings
 ml/TTS
+
+__pycache__

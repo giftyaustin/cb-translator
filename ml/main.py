@@ -21,15 +21,13 @@ import av
 import numpy as np
 import cv2
 from io import BytesIO
-
-
-
 ##########################################
 
 
 seamlessm4t = 0
 seamless_streaming = 1
 
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 #from streaming_translator_utils import SAMPLE_RATE, StatelessBytesTranslator
 #translator1 = StatelessBytesTranslator(tgt_lang="hin")  # Hindi output
@@ -479,6 +477,24 @@ def save_video_async(frames, output_path, fps=30, frame_size=None):
     thread.daemon = True
     thread.start()
 
+# call_lipsync_worker.py
+
+import pickle
+from multiprocessing.connection import Client
+
+def request_lipsync_in_worker(frame_buffer, audio_path, output_path):
+    address = ('localhost', 6001)
+    authkey = b'secret'
+
+    with Client(address, authkey=authkey) as conn:
+        data = pickle.dumps((frame_buffer, audio_path, output_path))
+        conn.send_bytes(data)
+        no_audio_path, final_path, error = conn.recv()
+        if error:
+            raise RuntimeError(f"Lip sync failed: {error}")
+        return no_audio_path, final_path
+
+
 def capture_frames_forever(proc: Popen, frame_width: int, frame_height: int, fps: int, num_of_seconds: int = 5):
     frame_size = frame_width * frame_height * 3  # BGR24
     max_frames = fps * num_of_seconds
@@ -499,7 +515,12 @@ def capture_frames_forever(proc: Popen, frame_width: int, frame_height: int, fps
                 print(f"time: {time.time()-start_time}")
                 #save_video_async(frame_buffer, f"out_{time.time()}.avi", fps=int(fps), frame_size=None)                
                 print(f"📦 Collected {len(frame_buffer)} frames ({num_of_seconds}s chunk)")
-
+                no_audio_vid, final_vid = request_lipsync_in_worker(
+                    frame_buffer, 
+                    "/home/test/Downloads/Lip_Sync_Wav2Lip 2/Lip_Sync_Wav2Lip/Input_Audio/demo.wav", 
+                    f"output_{time.time()}.mp4"
+                )
+                print("Lip sync done")
                 # Clear buffer for next chunk
                 frame_buffer.clear()
 
