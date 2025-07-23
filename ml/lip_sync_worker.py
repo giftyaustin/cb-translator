@@ -19,6 +19,8 @@ import ffmpeg
 import cv2
 import threading
 import queue
+import torchaudio
+import io
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -30,9 +32,9 @@ parser.add_argument('--outfile', type=str, default='/Users/apple/Downloads/Lip_S
 parser.add_argument('--static', type=lambda x: (str(x).lower() == 'true'), default=False)
 parser.add_argument('--fps', type=float, default=25)
 parser.add_argument('--pads', nargs='+', type=int, default=[0, 10, 0, 0])
-parser.add_argument('--face_det_batch_size', type=int, default=32)
-parser.add_argument('--wav2lip_batch_size', type=int, default=128)
-parser.add_argument('--resize_factor', type=int, default=2)
+parser.add_argument('--face_det_batch_size', type=int, default=16)
+parser.add_argument('--wav2lip_batch_size', type=int, default=64)
+parser.add_argument('--resize_factor', type=int, default=1)
 parser.add_argument('--crop', nargs='+', type=int, default=[0, -1, 0, -1])
 parser.add_argument('--box', nargs='+', type=int, default=[-1, -1, -1, -1])
 parser.add_argument('--rotate', default=False, action='store_true')
@@ -97,7 +99,9 @@ model = load_model("wav2lip_Chinese.pth")
 # ✅ MODIFIED datagen (preserve original frame if no face)
 def datagen(frames, mels):
     img_batch, mel_batch, frame_batch, coords_batch = [], [], [], []
+    #print(len(frames), len(mels))
     if args.box[0] == -1:
+        print("face detection in data gen")
         face_det_results = face_detect(frames if not args.static else [frames[0]])
     else:
         print('Using the specified bounding box...')
@@ -156,49 +160,61 @@ def video_writer_worker(write_queue, output_path, frame_size, fps):
     writer.release()
 
 
-def run_lipsync_from_frames(frame_buffer: list, audio_path: str, output_path: str, with_audio=True, fps=250):
-    args.face = None
-    args.audio = audio_path
-    args.outfile = output_path
+def run_lipsync_from_frames(frame_buffer: list, audio_bytes: bytes, output_path: str, with_audio=True, fps=250):
 
+    args.outfile = output_path
     full_frames = frame_buffer
     fps = int(fps)
     print(f"[stream] Received {len(full_frames)} frames")
 
-    # Preprocess audio
+    # === 1. Audio Preprocessing ===
     audio_start = time.time()
-    if not args.audio.endswith('.wav'):
-        wav_path = 'temp/temp.wav'
-        ffmpeg.input(args.audio).output(wav_path, ac=1, ar=16000).overwrite_output().run(quiet=True)
-        args.audio = wav_path
-    wav = audio.load_wav(args.audio, 16000)
+    waveform, sample_rate = torchaudio.load(io.BytesIO(audio_bytes))
+    if waveform.shape[0] == 2:
+        waveform = waveform.mean(dim=0, keepdim=True)
+    if sample_rate != 16000:
+        waveform = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=16000)(waveform)
+    wav = waveform.squeeze().cpu().numpy()
     mel = audio.melspectrogram(wav)
     print(f"[stream] Audio processed in {time.time() - audio_start:.2f}s")
 
-    # Break audio into mel chunks
-    mel_chunks = []
-    mel_step_size = 16
+    # === 2. Mel Chunks Creation ===
+    mel_chunks, mel_step_size = [], 16
     mel_idx_multiplier = 80. / fps
     i = 0
     while True:
         start_idx = int(i * mel_idx_multiplier)
-        if start_idx + mel_step_size > len(mel[0]):
-            mel_chunks.append(mel[:, len(mel[0]) - mel_step_size:])
+        if start_idx + mel_step_size > mel.shape[1]:
+            mel_chunks.append(mel[:, -mel_step_size:])
             break
-        mel_chunks.append(mel[:, start_idx: start_idx + mel_step_size])
+        mel_chunks.append(mel[:, start_idx:start_idx + mel_step_size])
         i += 1
     print(f"[stream] Mel chunks: {len(mel_chunks)}")
 
-    # Limit frames to mel chunks
-    full_frames = full_frames[:len(mel_chunks)]
+    # === 3. Match mel_chunks and frames ===
+    print(f"mel chunks: {len(mel_chunks)}, fullframes: {len(full_frames)}")
+    if len(mel_chunks) > len(full_frames):
+        full_frames += [full_frames[-1]] * (len(mel_chunks) - len(full_frames))
+    else:
+        full_frames = full_frames[:len(mel_chunks)]
+
+    # === 4. Prepare datagen ===
     gen = datagen(full_frames.copy(), mel_chunks)
 
     os.makedirs("temp", exist_ok=True)
     no_audio_video_path = f"temp/result_{int(time.time())}.avi"
     frame_h, frame_w = full_frames[0].shape[:2]
-    out = cv2.VideoWriter(no_audio_video_path, cv2.VideoWriter_fourcc(*'DIVX'), fps, (frame_w, frame_h))
 
+    # === 5. Threaded Video Writer ===
+    write_queue = queue.Queue()
+    writer_thread = threading.Thread(target=video_writer_worker, args=(write_queue, no_audio_video_path, (frame_w, frame_h), fps))
+    writer_thread.start()
+
+    # === 6. Run Inference ===
     frames_written = 0
+    args.wav2lip_batch_size = min(len(mel_chunks), args.wav2lip_batch_size or 32)
+    if args.wav2lip_batch_size == 0:
+        raise ValueError("No mel chunks available.")
 
     for i, (img_batch, mel_batch, frames, coords) in enumerate(
         tqdm(gen, total=int(np.ceil(len(mel_chunks) / args.wav2lip_batch_size)))
@@ -212,39 +228,48 @@ def run_lipsync_from_frames(frame_buffer: list, audio_path: str, output_path: st
         pred = pred.cpu().numpy().transpose(0, 2, 3, 1) * 255.
 
         for p, f, c in zip(pred, frames, coords):
+            if c is None:
+                write_queue.put(f)
+                continue
             x1, y1, x2, y2 = c
             if x2 <= x1 or y2 <= y1:
-                out.write(f)  # Write original frame if no valid face region
+                write_queue.put(f)
                 continue
             try:
                 p = cv2.resize(p.astype(np.uint8), (x2 - x1, y2 - y1))
                 f[y1:y2, x1:x2] = cv2.addWeighted(f[y1:y2, x1:x2], 0.2, p, 0.8, 0)
             except Exception as e:
                 print(f"[warning] Error applying lipsync: {e}")
-            out.write(f)
+            write_queue.put(f)
             frames_written += 1
 
-    # If no processed frame written, fallback to writing all original frames
+    # === 7. Fallback if no frames written ===
     if frames_written == 0:
         print("⚠️ No processed frames. Writing fallback video with original frames.")
         for f in full_frames:
-            out.write(f)
+            write_queue.put(f)
 
-    out.release()
+    write_queue.put(None)
+    writer_thread.join()
     print(f"[stream] Lip-synced video saved to {no_audio_video_path}")
 
+    # === 8. Mux Audio (if required) ===
+    final_output_path = args.outfile
     if with_audio:
         mux_start = time.time()
+        audio_wav_path = "temp/input_audio.wav"
+        with open(audio_wav_path, "wb") as f:
+            f.write(audio_bytes)
+
         command = [
             'ffmpeg', '-y',
             '-i', no_audio_video_path,
-            '-i', args.audio,
+            '-i', audio_wav_path,
             '-c:v', 'libx264',
             '-preset', 'ultrafast',
             '-c:a', 'aac',
-            '-strict', 'experimental',
             '-shortest',
-            args.outfile
+            final_output_path
         ]
         result = subprocess.run(command, capture_output=True, text=True)
 
@@ -254,15 +279,15 @@ def run_lipsync_from_frames(frame_buffer: list, audio_path: str, output_path: st
         else:
             print(f"[muxing] Audio+Video muxed in {time.time() - mux_start:.2f}s")
 
-        if os.path.exists(args.outfile):
-            print(f"✅ Output muxed video: {args.outfile}")
+        if not os.path.exists(final_output_path):
+            print("❌ Output file missing after muxing")
+            final_output_path = None
         else:
-            print(f"❌ Output file missing: {args.outfile}")
+            print(f"✅ Output muxed video: {final_output_path}")
 
+    return no_audio_video_path, final_output_path
 
-    return no_audio_video_path, (args.outfile if with_audio else None)
-
-address = ('localhost', 6001)  # or a UNIX socket path
+address = ('localhost', 6006)  # or a UNIX socket path
 authkey = b'secret'
 
 print("[Worker] Starting worker...")
@@ -275,11 +300,12 @@ with Listener(address, authkey=authkey) as listener:
             try:
                 data = conn.recv_bytes()
                 frame_buffer, audio_path, output_path = pickle.loads(data)
+                print(f"frame_size: {len(frame_buffer)}")
 
                 print("[Worker] Running lip sync...")
                 no_audio_path, final_path = run_lipsync_from_frames(
                     frame_buffer=frame_buffer,
-                    audio_path=audio_path,
+                    audio_bytes=audio_path,
                     output_path=output_path,
                     with_audio=True
                 )

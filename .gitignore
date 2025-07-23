@@ -17,7 +17,6 @@ pnpm-debug.log*
 Thumbs.db
 
 # Environment files
-.env
 .env.*.local
 
 # Coverage reports
@@ -34,7 +33,6 @@ out/
 .astro/
 
 # IDE configs
-.vscode/
 .idea/
 *.swp
 
@@ -63,3 +61,4 @@ ml/recordings
 ml/TTS
 
 __pycache__
+config.bat

@@ -15,6 +15,7 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
 from av import AudioFrame
 from av.audio.fifo import AudioFifo
 
+<<<<<<< HEAD
 from scipy import signal
 
 # resamples and converts from mono to stereo
@@ -25,6 +26,11 @@ def resample_audio(audio_bytes, original_sr=16000, target_sr=48000):
     resampled = np.clip(resampled, -32768, 32767).astype(np.int16)
     stereo_data = np.column_stack((resampled, resampled)).flatten()
     return stereo_data.tobytes()
+=======
+from seamlessm4t_translator_utils import translate_audio
+from streaming_translator_utils import StatelessBytesTranslator
+translator1 = StatelessBytesTranslator(tgt_lang="hin")  # Hindi output
+>>>>>>> cb85b84 (commiting the new function fles for streaming and seamlessm4t and changes in the webRTC_python.py for translation)
 
 # numpy array to bytes
 def tensor_to_bytes(translated_wav):
@@ -250,6 +256,7 @@ async def offer(request):
                     fifo.write(frame)
                     logging.info(f"received frame: {frame}")
 
+<<<<<<< HEAD
                     while fifo.samples >= samples_per_batch:
                         # reads chunk from the input queue
                         chunk_frame = fifo.read(samples=samples_per_batch)
@@ -257,6 +264,67 @@ async def offer(request):
                         output_frame = process_audio_frame_bytes(chunk_frame, lambda audio_bytes:translate(audio_bytes, frame_rate))
                         # adds chunk to the output queue
                         playback_track.push_av_frame(output_frame)
+=======
+                    while fifo.samples >= samples_per_chunk:
+                        chunk_frame = fifo.read(samples=samples_per_chunk)
+                        logger.info(f"💾 About to save chunk: samples={chunk_frame.samples}")
+                        samples = chunk_frame.to_ndarray()
+                        logging.info(f"ℹ️ Accumulated {samples.shape[1]} samples with shape {samples.shape}")
+                        chunk_bytes = samples.tobytes()    
+                        #print(chunk_bytes)
+
+                        which_translator = 2
+
+                        if which_translator == 1:
+                            #seamelessm4T
+                            sample_rate = 48000
+                            start_time = time.time()
+                            translated_wav, translated_sr = translate_audio(chunk_bytes, sample_width=2, frame_rate = sample_rate, channels = 2, tgt_lang = "hin")
+                            end_time = time.time()
+                            print(f"Inference time: {end_time-start_time: .4f} sec.")
+                            print(translated_sr)
+                            out_file = f"translated_raw_{time.time()}.wav"
+                            #torchaudio.save(out_file, translated_wav, 16000)
+                            #translated_segment = AudioSegment.from_wav(out_file)
+                            #play(translated_segment)
+                            #translated_wav = translated_wav.squeeze().cpu().numpy()
+                            print(translated_wav)
+
+                        if which_translator ==2:
+                            #seamless_streaming
+                            #audio_bytes = original_segment.raw_data
+                            sample_width = 2
+                            frame_rate = 48000
+                            channels = 2
+                            #print(f"Sample width: {sample_width}, Frame rate: {frame_rate}, Channels: {channels}")
+                            start_time = time.time()
+                            translated_wav, text = translator1.translate_chunk(
+                                chunk_bytes,
+                                input_sample_rate=frame_rate,
+                                sample_width=sample_width,
+                                channels=channels
+                                )
+                            end_time = time.time()
+                            print(translated_wav, text)
+                            print(f"Inference time: {end_time-start_time: .4f} sec.")
+                            if translated_wav is not None:
+                                translator1.play_audio(translated_wav)
+                                #translator1.save_audio(translated_wav)
+                            if text:
+                                print("📝", text)
+                        
+                        translated_audio_bytes = tensor_to_bytes(translated_wav)
+
+                        timestamp = int(time.time() * 1000)
+                        filename = f"chunk_{timestamp}.wav"
+                        save_wav_from_bytes(filename, chunk_bytes, sample_rate=sample_rate, num_channels=2)
+
+                        # Send chunk back over WebRTC
+                        logging.info("Starting streaming back")
+                        #playback_track.push_chunk(chunk_bytes)
+                        playback_track.push_chunk(translated_audio_bytes)
+
+>>>>>>> cb85b84 (commiting the new function fles for streaming and seamlessm4t and changes in the webRTC_python.py for translation)
 
             except Exception as e:
                 logger.error(f"❌ Error while receiving audio: {e}", exc_info=True)
