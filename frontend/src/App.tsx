@@ -32,7 +32,7 @@ function App() {
         }
       });
 
-      await startStreaming(mediaStream);
+      await startStreaming(mediaStream, roomCode);
       setJoined(true);
     } catch (err: any) {
       console.trace('Join failed:', err);

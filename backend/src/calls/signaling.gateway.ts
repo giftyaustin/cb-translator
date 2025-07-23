@@ -33,6 +33,7 @@ const translationConsumers = new Map<string, Consumer>();
 
 let io: Server;
 
+
 @WebSocketGateway({
     cors: {
         origin: '*',
@@ -47,6 +48,10 @@ export class SignalingGateway implements OnGatewayInit {
         console.log('🚀 Socket.IO Gateway ready');
     }
 
+    handleConnection(socket: Socket) {
+        console.log(`User connected ====== : ${socket.id}`);
+    }
+
     handleDisconnect(socket: Socket) {
         console.log(`User disconnected: ${socket.id}`);
         this.closeTransports(socket.id);
@@ -59,6 +64,8 @@ export class SignalingGateway implements OnGatewayInit {
 
     @SubscribeMessage('get-rtp-capabilities')
     handleGetRtp(socket: Socket) {
+        console.log('Getting RTP capabilities');
+        
         const rtpCapabilities = this.mediasoupService.getRtpCapabilities();
         socket.emit('rtp-capabilities', rtpCapabilities);
     }
@@ -97,11 +104,12 @@ export class SignalingGateway implements OnGatewayInit {
 
 
                 let ffmpegProducer: Producer<AppData> | null = null;
-
+                let ffmpegVideoProducer: Producer<AppData> | null = null;
+                const recvTransport = await this.mediasoupService.createPlainTransport("recv");
+                const audioPlainTransport = await this.mediasoupService.createPlainTransport("send");
                 if (kind === 'audio') {
                     const rtpPort = getPort();
                     // [Mediasoup -> FFmpeg]
-                    const audioPlainTransport = await this.mediasoupService.createPlainTransport("send");
                     translationTransports.set(`${socket.id}-send`, audioPlainTransport);
                     await audioPlainTransport.connect({
                         ip: '127.0.0.1',
@@ -115,7 +123,7 @@ export class SignalingGateway implements OnGatewayInit {
                     translationConsumers.set(`${socket.id}-audio`, consumer);
 
                     // [FFmpeg -> Mediasoup]
-                    const recvTransport = await this.mediasoupService.createPlainTransport("recv");
+
                     translationTransports.set(`${socket.id}-recv`, recvTransport);
                     await recvTransport.connect({
                         ip: '127.0.0.1',    // FFmpeg sends audio to this IP
@@ -206,6 +214,7 @@ export class SignalingGateway implements OnGatewayInit {
                     const rtpPort = getPort();  // Allocate a dynamic RTP port
                     // const rtpPort = 25001;  // Allocate a dynamic RTP port
                     const videoPlainTransport = await this.mediasoupService.createPlainTransport("send");
+                    translationTransports.set(`${socket.id}-send`, videoPlainTransport);
                     translationTransports.set(`${socket.id}-video`, videoPlainTransport);
                     await videoPlainTransport.connect({
                         ip: '127.0.0.1',
@@ -230,6 +239,7 @@ export class SignalingGateway implements OnGatewayInit {
                         codec: codecName,
                         clockRate,
                         payloadType,
+                        targetPort: recvTransport.tuple.localPort,
                         sessionId,
                     };
 
@@ -241,6 +251,46 @@ export class SignalingGateway implements OnGatewayInit {
                         .then(res => res.json())
                         .then(data => console.log("✅ Video capture pipeline initiated:", data))
                         .catch(err => console.error("❌ Error initiating video capture pipeline:", err));
+
+                    console.log(`🔄 Video Plain Transport created for session ${sessionId} with RTP port ${rtpPort}, ${recvTransport.tuple.localPort}`);
+                    ffmpegVideoProducer = await recvTransport.produce({
+                        kind: 'video',
+                        rtpParameters: {
+                            codecs: [
+                                {
+                                    mimeType: "video/VP8",
+                                    payloadType: 100, // match Mediasoup router's preferredPayloadType
+                                    clockRate: 90000,
+                                    parameters: {
+                                        "packetization-mode": 1,
+                                        "profile-level-id": "42e01f",
+                                        "level-asymmetry-allowed": 1
+                                    },
+                                    rtcpFeedback: [
+                                        { type: "nack" },
+                                        { type: "nack", parameter: "pli" },
+                                        { type: "ccm", parameter: "fir" },
+                                        { type: "goog-remb" }
+                                    ]
+                                }
+                            ],
+                            encodings: [{ ssrc: ssrc }]
+                        },
+                    })
+
+                    // setInterval(() => {
+                    //     ffmpegVideoProducer?.getStats().then(stats => {
+                    //         console.log(`FFmpeg Video Producer Stats: ${JSON.stringify(stats)}`);
+                    //     }).catch(err => {
+                    //         console.error(`Error getting FFmpeg Video Producer stats: ${err}`);
+                    //     });
+                    // }, 1000); // Keep the connection alive
+
+                    io.emit('new-producer', {
+                        producerId: ffmpegVideoProducer.id,
+                        socketId: socket.id,
+                        kind: 'video',
+                    });
                 }
                 // ====
 
