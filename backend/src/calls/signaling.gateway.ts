@@ -149,6 +149,7 @@ export class SignalingGateway implements OnGatewayInit {
                         outputPort: recvTransport.tuple.localPort,
                         targetLang,
                         sessionId,
+                        enableVoiceClone: false
                     };
 
                     fetch("http://0.0.0.0:2002/translation/initiate", {
