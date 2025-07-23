@@ -46,7 +46,7 @@ def reset_states(system, states):
 
 
 
-def get_audio_bytes(samples, sr: int, target_sr: int = 48000, stereo: bool = False) -> bytes:
+def get_audio_bytes(samples, sr: int, target_sr: int = 96000, stereo: bool = False) -> bytes:
     import torchaudio
     import io
 
