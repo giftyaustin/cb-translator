@@ -13,6 +13,7 @@ import numpy as np
 from scipy import signal
 import torch
 import torchaudio
+from lib.send_video_frames import send_frames_to_mediasoup, frame_generator, video_frames_storage
 
 # import noisereduce as nr
 
@@ -41,7 +42,7 @@ if IS_PROD:
 else:
     MEDIASERVER_IP = "127.0.0.1"
 
-video_frames_storage = {}
+
 frames_arrived = False
 
 
@@ -425,17 +426,10 @@ class TranslationRequest(BaseModel):
     sessionId: str
 
 
-is_first_process = True
 
 
 @app.post("/translation/initiate")
 async def initiate_translation(data: TranslationRequest):
-    global is_first_process  # Declare the variable as global
-    if not ENABLE_TRANSLATION:
-        is_first_process = False  # Set the global variable to False
-    if is_first_process:
-        is_first_process = False  # Set the global variable to False
-        return
     print("📥 Received translation initiation:", data.dict())
     sample_rate = data.clockRate
 
@@ -526,7 +520,7 @@ def run_ffmpeg_video_pipe(sdp_path, width=640, height=480):
     cmd = [
         "ffmpeg",
         "-loglevel",
-        "debug",
+        "info",
         "-protocol_whitelist",
         "file,udp,rtp",
         "-f",
@@ -552,9 +546,6 @@ FRAME_HEIGHT = 480
 FRAME_SIZE = FRAME_WIDTH * FRAME_HEIGHT * 3  # for bgr24
 FPS = 250
 NUM_OF_SECONDS = 5
-
-
-import queue
 
 
 def save_video_from_frames(frames, output_path, fps=250, frame_size=None):
@@ -680,6 +671,7 @@ class VideoCaptureRequest(BaseModel):
     codec: str
     clockRate: int
     rtpPort: int
+    targetPort: int
     sessionId: str
 
 
@@ -704,11 +696,7 @@ async def initiate_video_capture(data: VideoCaptureRequest):
         target=print_ffmpeg_logs, args=(ffmpeg_proc, "FFmpeg-VIDEO"), daemon=True
     ).start()
 
-    # threading.Thread(
-    #     target=capture_frames_forever,
-    #     args=(ffmpeg_proc, FRAME_WIDTH, FRAME_HEIGHT, FPS, NUM_OF_SECONDS),
-    #     daemon=True,
-    # ).start()
+    
     threading.Thread(
         target=store_frames,
         args=(
@@ -720,6 +708,16 @@ async def initiate_video_capture(data: VideoCaptureRequest):
         ),
         daemon=True,
     ).start()
+    
+    # threading.Thread(
+    #     target=send_frames_to_mediasoup,
+    #     args=(
+    #         frame_generator(data.sessionId),
+    #         MEDIASERVER_IP,  # your Mediasoup plain transport IP
+    #         data.targetPort  # your Mediasoup plain transport video port
+    #     ),
+    #     daemon=True,
+    # ).start()
 
     return {"status": "Frame-based video capture started."}
 
