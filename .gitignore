@@ -17,7 +17,6 @@ pnpm-debug.log*
 Thumbs.db
 
 # Environment files
-.env
 .env.*.local
 
 # Coverage reports
@@ -34,7 +33,6 @@ out/
 .astro/
 
 # IDE configs
-.vscode/
 .idea/
 *.swp
 
@@ -45,6 +43,8 @@ out/
 *.zip
 *.wav
 *.mp4
+*.avi
+
 
 # TypeScript
 *.tsbuildinfo
@@ -61,3 +61,7 @@ ml/recordings
 ml/TTS
 */__pycache__/
 *.pyc
+
+yolov8n-face.pt
+wav2lip_Chinese.pth
+config.bat
